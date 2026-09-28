@@ -135,3 +135,138 @@ models/        snapshots locais de small, medium e large-v3
 ```
 
 Mídias, modelos e saídas são ignorados pelo Git. A PoC mantém os jobs em memória; reiniciar o container apaga o estado dos jobs, mas preserva os arquivos nos volumes locais.
+
+## Operação do piloto
+
+Runbook do operador para a primeira fase da API assíncrona de transcrição
+(`tasks/prd-api-transcricao-assincrona/prd.md` RF-01 e RF-04,
+`tasks/prd-api-transcricao-assincrona/techspec.md` V-01 e V-05, ADR-002).
+Não há API administrativa, console nem provisionamento automatizado no piloto:
+toda operação abaixo é manual, fora da API pública. A API administrativa fica
+para a fase 2; nenhum segredo real trafega por este documento.
+
+Permissões do piloto: todas as chaves têm as mesmas permissões iniciais —
+criar jobs e ler estado/resultado somente dos jobs criados pela própria
+credencial (`credential_id`). Leitura de job de outra conta, de outra chave
+ou expirado retorna `404` neutro. O segredo da API Key não é o segredo
+(material de assinatura) do webhook: os dois ciclos de vida são independentes.
+
+### 1. Criar conta e API Key
+
+1. Crie a conta do cliente no armazenamento operacional de credenciais
+   (conta genérica, sem conceito de curso/aula).
+2. Gere um `credential_id` estável por chave e um segredo de alta entropia.
+   Persista somente verificador/hash e metadados (conta, `credential_id`,
+   data de criação, último uso, situação de revogação). Nunca persista o
+   segredo em claro.
+3. Cadastre o destino HTTPS do webhook da conta nesta mesma ocasião ou
+   depois (seção 6); a chave funciona sem webhook, mas o aviso terminal só
+   é entregue com destino configurado.
+
+### 2. Entregar o segredo uma única vez
+
+1. Apresente o segredo ao cliente uma única vez, por canal seguro (TLS).
+2. Registre data/hora da entrega e quem recebeu. Após a entrega, o segredo
+   não pode ser recuperado pelo operador: consultas futuras mostram apenas
+   metadados.
+3. Oriente o cliente a chamar a API com `X-API-Key: <segredo>` sobre HTTPS e
+   a guardar o segredo em gerenciador próprio, fora de logs, traces e código.
+
+### 3. Consultar metadados sem recuperar o segredo
+
+1. Para auditoria ou suporte, consulte apenas metadados: conta,
+   `credential_id`, data de criação, permissões iniciais, último uso e
+   revogação.
+2. Nunca reexiba, exporte ou registre o segredo em claro em logs, traces,
+   erros, tickets ou payloads. Se o segredo foi perdido, não tente
+   recuperá-lo: execute a rotação (seção 4).
+
+### 4. Rotacionar a API Key (mesmo `credential_id`)
+
+1. Gere um novo segredo mantendo o mesmo `credential_id`. O novo segredo
+   conserva o acesso aos jobs existentes daquela credencial.
+2. Entregue o novo segredo uma única vez (mesmo rito da seção 2) e confirme
+   o recebimento antes de desativar o antigo, salvo comprometimento.
+3. Invalide o segredo antigo: a chave antiga deixa de autorizar chamadas
+   (`401`). A rotação da API Key não afeta o material de assinatura do
+   webhook, e vice-versa.
+
+### 5. Revogar a API Key
+
+1. Marque a credencial como revogada no armazenamento operacional. Chamadas
+   com chave revogada recebem `401`, sem revelar dados de jobs.
+2. Registre data/hora, motivo e responsável. A revogação é imediata e não
+   reexpõe o segredo.
+
+### 6. Cadastrar e rotacionar o destino HTTPS e o material do webhook
+
+Independente da API Key, por conta:
+
+1. Cadastre um destino HTTPS por conta (URL do callback vem da configuração
+   do operador, nunca do job). Exija HTTPS e valide destino e
+   redirecionamentos contra SSRF (sem loopback, redes privadas, link-local
+   ou metadados), conforme o baseline. Quando o receptor mudar, valide a nova
+   URL com os mesmos critérios, confirme que o novo receptor valida com o
+   material de assinatura já provisionado e atualize o destino na configuração
+   operacional da conta. Essa troca não depende da API Key nem exige rotacionar
+   ou reentregar o material de assinatura: mantenha a chave e o material
+   atuais. As entregas seguintes usam a URL atualizada. Se também for necessário
+   trocar o material de assinatura, faça essa operação separadamente.
+2. Gere material de assinatura de alta entropia, único por destino
+   (recomendação Standard Webhooks: 24 a 64 bytes, formato identificável
+   `whsec_` em Base64). Guarde-o em armazenamento de segredos; somente a
+   Entrega de Notificações o lê para assinar. Nunca o inclua em payload,
+   log ou erro.
+3. Entregue o material ao cliente uma única vez, como na seção 2. O evento
+   usa Standard Webhooks v1 (`webhook-id` estável por evento,
+   `webhook-timestamp` renovado por tentativa, `webhook-signature`
+   `v1,<base64(HMAC-SHA256(segredo, id + "." + timestamp + "." + corpo))>`),
+   tolerância de ±300 s e deduplicação pelo ID por 72 h.
+4. Rotação planejada: cadastre o novo material mantendo o antigo válido e
+   assine com os dois segredos por 72 horas (janela máxima de retry); depois
+   remova o antigo. Comprometimento: revogue o material antigo imediatamente,
+   sem sobreposição, e emita material novo.
+5. Códigos do destino: `2xx` encerra a entrega; `3xx` é falha sem
+   redirecionamento; `410` desativa o destino; `429` reduz o ritmo
+   (considerar `Retry-After`). Retentativas de falhas transitórias seguem por
+   até 72 h com backoff exponencial e jitter, sem alterar o estado do job.
+
+### 7. Auditoria mínima
+
+Registre para cada ação (criação, entrega, consulta de metadados, rotação,
+revogação, cadastro/rotação do destino e do material): data/hora, operador,
+conta e `credential_id` afetados e motivo. Auditoria contém metadados e
+nunca segredos, URLs assinadas (`sourceUrl`), mídia ou transcrição.
+
+### 8. Proteção de segredo e URL
+
+- Segredos (API Key e material do webhook) e `sourceUrl` nunca aparecem em
+  logs, traces, métricas, erros públicos (RFC 9457), respostas ou payloads
+  de webhook.
+- `sourceUrl` é lida somente pelo downloader autorizado, não é devolvida ao
+  cliente e é descartada após download bem-sucedido ou esgotamento das
+  tentativas.
+- Configuração local sensível fica em `.env` (ignorado pelo Git); nunca em
+  `.env.example` ou no repositório.
+
+### 9. Conta, chave e destino de teste
+
+Para fumaça e integração do piloto, provisione conta, chave e destino
+isolados (banco, bucket e receptor HTTPS de teste), com material de
+assinatura de teste descartável. Não reutilize credenciais, buckets,
+tabelas ou destinos de outro produto. Limpe objetos e versões de teste e
+confirme permissões mínimas antes do piloto.
+
+### 10. Recuperação de acesso comprometido
+
+1. Se a API Key vazar: revogue-a imediatamente (seção 5), provisione novo
+   segredo com o mesmo `credential_id` se a continuidade dos jobs exigir, e
+   revise a auditoria de último uso para estimar exposição.
+2. Se o material do webhook vazar: revogue-o imediatamente sem sobreposição
+   de 72 h, emita material novo e oriente o cliente a rejeitar assinaturas
+   do material antigo.
+3. Se ambos puderem estar comprometidos, trate os dois ciclos de forma
+   independente e simultânea: a rotação de um não renova nem invalida o
+   outro.
+4. Comunique o cliente pelo canal operacional, nunca incluindo segredos em
+   claro além da entrega única do novo material.
