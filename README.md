@@ -265,8 +265,129 @@ confirme permissões mínimas antes do piloto.
 2. Se o material do webhook vazar: revogue-o imediatamente sem sobreposição
    de 72 h, emita material novo e oriente o cliente a rejeitar assinaturas
    do material antigo.
-3. Se ambos puderem estar comprometidos, trate os dois ciclos de forma
-   independente e simultânea: a rotação de um não renova nem invalida o
-   outro.
-4. Comunique o cliente pelo canal operacional, nunca incluindo segredos em
-   claro além da entrega única do novo material.
+ 3. Se ambos puderem estar comprometidos, trate os dois ciclos de forma
+    independente e simultânea: a rotação de um não renova nem invalida o
+    outro.
+ 4. Comunique o cliente pelo canal operacional, nunca incluindo segredos em
+    claro além da entrega única do novo material.
+
+## Integração com code-for-coders
+
+Guia do primeiro consumidor da API assíncrona de transcrição
+(`tasks/prd-api-transcricao-assincrona/prd.md` RF-02, RF-04, RF-05 e US-01,
+`tasks/prd-api-transcricao-assincrona/techspec.md#habilitadores-inevitáveis` e
+`#interfaces-entre-fatias-ou-times`, ADR-001, ADR-002).
+Acordo público vigente: `tasks/prd-api-transcricao-assincrona/api-contract.yaml`
+(OpenAPI 3.1.0, contrato 1.0.0) e documentação derivada em
+`tasks/prd-api-transcricao-assincrona/api-contract.md`. O YAML é a fonte dos
+schemas; este guia não o duplica. Abrange criação, notificação e resultado;
+não cria comportamento novo no backend Whisper.
+
+Dependência externa antes do piloto integrado: o contrato Media existente no
+consumidor só oferece URL de escrita. A geração de URL GET de leitura descrita
+abaixo precisa ser implementada no code-for-coders antes do piloto integrado.
+A implementação do consumidor é rastreada no plano, fora do checkout Whisper.
+
+### 1. Gerar a URL de leitura pouco antes do POST
+
+1. O code-for-coders gera uma URL HTTPS pré-assinada de leitura (GET) para o
+   seu objeto privado e a envia como `sourceUrl`. Seguir Q-03/Q-04:
+   URL GET de leitura, sem compartilhar credenciais do bucket S3 do
+   consumidor com o Whisper.
+2. Gere a URL pouco antes de chamar `POST /v1/transcriptions` e garanta
+   validade efetiva mínima de 60 minutos desde a emissão, incluindo validade
+   suficiente das credenciais temporárias que a assinam. O S3 verifica a
+   expiração no início de cada request: um download já iniciado pode terminar
+   depois dela, mas uma retomada iniciada depois da expiração falha.
+3. Envie somente a URL; nunca envie credenciais do bucket do consumidor. A URL
+   não é devolvida em respostas, webhooks, logs, traces, métricas ou erros, e
+   é descartada após download bem-sucedido ou esgotamento das tentativas.
+
+### 2. Criar o job
+
+```bash
+curl -X POST https://whisper.example.test/v1/transcriptions \
+  -H 'X-API-Key: <segredo>' \
+  -H 'Idempotency-Key: 01J9M2YB8K4W6N7P3Q5R1S0ABC' \
+  -H 'Content-Type: application/json' \
+  -d '{"sourceUrl":"https://media.example.test/signed/arquivo.mp4?sig=exemplo","clientReference":"asset-7891"}'
+```
+
+1. Envie `sourceUrl` com `X-API-Key` (sobre HTTPS) e `Idempotency-Key`
+   estável. `clientReference` é opcional e opaco: o Whisper o devolve sem
+   interpretar.
+2. Guarde o ID opaco (`jobId`), o `statusUrl` (`/v1/transcriptions/{jobId}`) e
+   o cabeçalho `Location`. A resposta é `202 Accepted` depois que a ingestão
+   assume o job e inicia a conexão de download; não aguarda a transcrição.
+3. Idempotência: escopo por conta + `credential_id` + `Idempotency-Key`,
+   retida por 120 segundos. Mesmo JSON semântico (ordem/whitespace podem
+   variar; valores, incluindo `sourceUrl`, iguais) retorna o mesmo job.
+   Reuso com corpo diferente retorna `409 IDEMPOTENCY_KEY_REUSED`.
+4. Limites na criação: até 5 GiB e formatos `.mp4`, `.mkv`, `.webm`, `.mp3`,
+   `.wav`, `.m4a` com validação real; mídia acima de 2 horas termina em
+   `failed/MEDIA_DURATION_LIMIT_EXCEEDED`. Tamanho conhecido e inspecionável
+   no início da conexão (por exemplo, `Content-Length`) acima de 5 GiB recebe
+   `413 MEDIA_SIZE_LIMIT_EXCEEDED` sem criar job; tamanho desconhecido
+   (por exemplo, chunked) segue para streaming com o limite aplicado depois.
+
+### 3. Acompanhar o estado
+
+```bash
+curl https://whisper.example.test/v1/transcriptions/<jobId> \
+  -H 'X-API-Key: <segredo>'
+```
+
+1. Consulte o `statusUrl` com a mesma API Key (mesma conta e `credential_id`).
+   Estados: `downloading → queued → processing → completed|failed`, com
+   horários disponíveis e resumo seguro de falha (`failure.code`/`message`).
+2. Job de outra conta, de outra chave ou expirado retorna `404 NOT_FOUND`
+   neutro. O estado terminal permanece consultável por até 24 horas após
+   `terminalAt`.
+
+### 4. Validar e deduplicar o webhook
+
+1. O Whisper envia o evento `transcriptionTerminal` ao destino HTTPS
+   cadastrado pelo operador para a conta (nunca via job), ao menos uma vez,
+   com `eventId`, `jobId`, estado terminal e `clientReference` quando enviada.
+   O corpo não contém mídia nem transcrição.
+2. Verifique a assinatura Standard Webhooks v1 sobre os bytes exatos do corpo
+   (`webhook-id + "." + webhook-timestamp + "." + raw_body`, HMAC-SHA256 em
+   Base64, `webhook-signature: v1,<assinatura>`), em tempo constante, com
+   tolerância de ±300 s no timestamp. Em rotação planejada pode haver duas
+   assinaturas `v1` separadas por espaço por 72 h.
+3. Deduplique pelo `webhook-id`/`eventId` estável (igual em todas as
+   tentativas) durante a janela de retry de 72 h. Responda `2xx` para
+   confirmar; `3xx` é falha sem redirecionamento; `410` desativa o destino;
+   `429` reduz o ritmo (considerar `Retry-After`). Falhas transitórias são
+   repetidas por até 72 h sem alterar o estado do job.
+
+### 5. Buscar o resultado dentro de 24 horas
+
+```bash
+curl https://whisper.example.test/v1/transcriptions/<jobId>/result \
+  -H 'X-API-Key: <segredo>'
+```
+
+1. Busque `GET /v1/transcriptions/{jobId}/result` com a conta e a credencial
+   proprietárias, dentro de 24 horas após `terminalAt`. Somente job
+   `completed` retorna `200` com JSON `schemaVersion: 1`, `pt-BR`, duração e
+   segmentos em milissegundos relativos ao início.
+2. Job não concluído ou `failed` retorna `409 RESULT_NOT_AVAILABLE` (sem
+   parcial); expirado, de outra conta ou de outra chave retorna `404`.
+   Persista o resultado no seu produto: após o expurgo ele não volta.
+
+### 6. Contrato de falha de origem
+
+1. O Whisper faz até 3 tentativas totais (inicial + 2 retentativas) somente
+   para falhas transitórias de rede, timeout e HTTP 408/429/5xx, com timeout
+   de conexão de 10 s, timeout de inatividade de leitura de 60 s (não limitam
+   um download que continua progredindo), full jitter de 0–5 s e 0–30 s nas
+   retentativas e respeito a `Retry-After` quando a nova tentativa ainda pode
+   começar antes do vencimento da URL.
+2. Não repete falhas permanentes (URL inválida/expirada, 4xx exceto 408/429)
+   nem inicia tentativa após a expiração; não renova nem solicita nova URL
+   automaticamente.
+3. Esgotadas as tentativas, o job termina em `failed/SOURCE_UNAVAILABLE`
+   (ou `failed/MEDIA_SIZE_LIMIT_EXCEEDED` se o streaming exceder 5 GiB).
+   Para reprocessar após falha final, o consumidor gera outra URL de leitura
+   e envia uma nova solicitação com nova `Idempotency-Key`.

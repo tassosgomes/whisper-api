@@ -45,7 +45,7 @@ V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso a
 
 - [x] 1.0 Atualizar e aprovar o contrato HTTP público
 - [x] 2.0 Registrar o procedimento operacional do piloto
-- [ ] 3.0 Publicar o acordo de integração do primeiro consumidor
+- [x] 3.0 Publicar o acordo de integração do primeiro consumidor
 - [ ] 4.0 Autenticar e isolar chamadas por conta e credencial
 - [ ] 5.0 Aceitar jobs idempotentes após iniciar aquisição
 - [ ] 6.0 Baixar, validar e transcrever mídia com estado recuperável
