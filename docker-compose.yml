@@ -1,0 +1,71 @@
+services:
+  transcriber:
+    image: local-meeting-transcriber:dev
+    build: .
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      - ./data/input:${APP_INPUT_DIR:-/data/input}:ro
+      - ./data/output:${APP_OUTPUT_DIR:-/data/output}:rw
+      - ./models:/models:ro
+    environment:
+      APP_INPUT_DIR: ${APP_INPUT_DIR:-/data/input}
+      APP_OUTPUT_DIR: ${APP_OUTPUT_DIR:-/data/output}
+      CPU_LIMIT: ${CPU_LIMIT:-8}
+      WHISPER_MODEL_NAME: ${WHISPER_MODEL_NAME:-medium}
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/models/${WHISPER_MODEL_NAME:-medium}}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_THREADS: ${WHISPER_THREADS:-${CPU_LIMIT:-8}}
+      JOB_CONCURRENCY: ${JOB_CONCURRENCY:-1}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    cpus: ${CPU_LIMIT:-8}
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+
+  model-prep:
+    image: local-meeting-transcriber:dev
+    build: .
+    profiles: ["tools"]
+    entrypoint: ["python", "scripts/prepare_models.py"]
+    command: ["small", "medium", "large-v3"]
+    volumes:
+      - ./models:/models:rw
+    environment:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HOME: /tmp/huggingface
+      HF_HUB_DISABLE_XET: "1"
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+
+  offline:
+    image: local-meeting-transcriber:dev
+    profiles: ["tools"]
+    network_mode: none
+    volumes:
+      - ./data/input:${APP_INPUT_DIR:-/data/input}:ro
+      - ./data/output:${APP_OUTPUT_DIR:-/data/output}:rw
+      - ./models:/models:ro
+    environment:
+      APP_INPUT_DIR: ${APP_INPUT_DIR:-/data/input}
+      APP_OUTPUT_DIR: ${APP_OUTPUT_DIR:-/data/output}
+      CPU_LIMIT: ${CPU_LIMIT:-8}
+      WHISPER_MODEL_NAME: ${WHISPER_MODEL_NAME:-medium}
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/models/${WHISPER_MODEL_NAME:-medium}}
+      WHISPER_THREADS: ${WHISPER_THREADS:-${CPU_LIMIT:-8}}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    cpus: ${CPU_LIMIT:-8}
+    init: true

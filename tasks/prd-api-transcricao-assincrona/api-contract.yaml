@@ -1,0 +1,641 @@
+openapi: 3.1.0
+info:
+  title: Whisper — API assíncrona de transcrição
+  version: 1.0.0
+  description: |
+    Contrato do recorte HTTP do PRD de API assíncrona de transcrição.
+
+    Fonte principal: tasks/prd-api-transcricao-assincrona/prd.md v1.0,
+    aprovado em 2026-09-28. O contrato está Em Revisão enquanto as decisões
+    listadas em contracts.md não forem fechadas. Seu escopo é a interface HTTP
+    deste PRD, inclusive o webhook enviado pelo Whisper ao destino cadastrado
+    para a conta.
+
+    O prefixo /v1 preserva a rota conhecida da PoC. Não há contrato anterior
+    nem evidência consultada de implantação em produção; compatibilidade com
+    produção não foi verificada.
+  contact:
+    name: Equipe Whisper
+
+servers:
+  - url: /v1
+    description: Prefixo versionado; host e ambiente são definidos por implantação.
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Transcriptions
+    description: Criação e consulta de jobs e resultados de transcrição.
+
+paths:
+  /transcriptions:
+    post:
+      summary: Criar job de transcrição
+      description: |
+        Aceita uma URL HTTPS assinada de download e uma chave de idempotência.
+        Responde depois que a ingestão assumir o job e iniciar a conexão de
+        download; não espera o processamento. A URL não é repetida nas respostas
+        nem deve aparecer em logs ou traces. No primeiro corte, o idioma do
+        resultado é pt-BR e a duração máxima da mídia é 2 horas.
+
+        Repetir a mesma requisição com a mesma chave retorna o mesmo job, no
+        estado atual, sem iniciar outro processamento. Reutilizar a chave para
+        outro corpo retorna 409 IDEMPOTENCY_KEY_REUSED. O prazo de retenção da
+        chave e a regra de equivalência do corpo permanecem em revisão.
+      operationId: createTranscription
+      tags:
+        - Transcriptions
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Chave estável para repetição segura da mesma solicitação.
+          schema:
+            type: string
+            minLength: 1
+            examples:
+              - 01J9M2YB8K4W6N7P3Q5R1S0ABC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTranscriptionRequest'
+            examples:
+              create:
+                value:
+                  sourceUrl: https://media.example.test/signed/arquivo.mp4?sig=not-a-real-signature
+                  clientReference: asset-7891
+      responses:
+        '202':
+          description: Job aceito; a conexão de download já foi iniciada.
+          headers:
+            Location:
+              description: Referência do recurso para acompanhar o job.
+              schema:
+                type: string
+                format: uri-reference
+                examples:
+                  - /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTranscriptionResponse'
+              examples:
+                accepted:
+                  value:
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    status: downloading
+                    createdAt: '2026-09-28T14:30:00Z'
+                    statusUrl: /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    clientReference: asset-7891
+        '400':
+          description: Corpo JSON malformado ou parâmetro obrigatório ausente.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                invalidRequest:
+                  value:
+                    type: about:blank
+                    title: Requisição inválida
+                    status: 400
+                    code: INVALID_REQUEST
+                    instance: /v1/transcriptions
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: A chave de idempotência já foi usada com outro corpo.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                idempotencyConflict:
+                  value:
+                    type: about:blank
+                    title: Conflito de idempotência
+                    status: 409
+                    code: IDEMPOTENCY_KEY_REUSED
+                    instance: /v1/transcriptions
+        '422':
+          description: URL de origem inválida para o contrato (por exemplo, não HTTPS).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                invalidSource:
+                  value:
+                    type: about:blank
+                    title: URL de origem inválida
+                    status: 422
+                    code: INVALID_SOURCE_URL
+                    instance: /v1/transcriptions
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /transcriptions/{jobId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      summary: Consultar estado do job
+      description: |
+        Retorna o estado público atual e os horários disponíveis. Jobs de outra
+        conta e jobs expirados respondem 404 NOT_FOUND sem revelar estado ou
+        conteúdo. Um job terminal permanece consultável por até 24 horas a
+        partir de terminalAt.
+      operationId: getTranscription
+      tags:
+        - Transcriptions
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Estado do job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptionJob'
+              examples:
+                processing:
+                  value:
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    status: processing
+                    createdAt: '2026-09-28T14:30:00Z'
+                    updatedAt: '2026-09-28T14:34:12Z'
+                    clientReference: asset-7891
+                failed:
+                  value:
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    status: failed
+                    createdAt: '2026-09-28T14:30:00Z'
+                    updatedAt: '2026-09-28T14:36:02Z'
+                    terminalAt: '2026-09-28T14:36:02Z'
+                    failure:
+                      code: SOURCE_UNAVAILABLE
+                      message: Não foi possível obter a mídia na origem.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /transcriptions/{jobId}/result:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      summary: Buscar resultado da transcrição
+      description: |
+        Retorna o resultado JSON versionado somente quando o job está completed
+        e dentro da retenção de 24 horas após o estado terminal. Enquanto o job
+        não estiver concluído ou se tiver terminado em failed, retorna
+        409 RESULT_NOT_AVAILABLE; não há resultado parcial. Após a expiração,
+        responde 404 NOT_FOUND.
+      operationId: getTranscriptionResult
+      tags:
+        - Transcriptions
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Resultado completo da transcrição.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptionResult'
+              examples:
+                result:
+                  value:
+                    schemaVersion: 1
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    language: pt-BR
+                    durationMs: 3600000
+                    segments:
+                      - startMs: 1240
+                        endMs: 4100
+                        text: Exemplo de transcrição.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: O job ainda não concluiu com sucesso ou terminou em falha.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                resultNotAvailable:
+                  value:
+                    type: about:blank
+                    title: Resultado indisponível
+                    status: 409
+                    code: RESULT_NOT_AVAILABLE
+                    instance: /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC/result
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+webhooks:
+  transcriptionTerminal:
+    post:
+      summary: Receber aviso terminal de transcrição
+      description: |
+        O Whisper envia o evento ao URL cadastrado pelo operador para a conta
+        proprietária do job. O destino não é enviado nem alterado na criação do
+        job. A entrega é ao menos uma vez; eventId permanece igual nas
+        retentativas e permite deduplicação. O corpo não inclui mídia nem
+        transcrição. O cliente confirma o recebimento com uma resposta HTTP 2xx.
+
+        O webhook usa material de verificação independente da API Key. Cabeçalho,
+        algoritmo, representação assinada e janela contra replay ainda estão em
+        revisão e devem ser definidos antes da implementação.
+      operationId: receiveTranscriptionTerminalWebhook
+      tags:
+        - Transcriptions
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranscriptionTerminalEvent'
+            examples:
+              completed:
+                value:
+                  eventId: evt_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                  jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                  status: completed
+                  clientReference: asset-7891
+      responses:
+        '2XX':
+          description: O consumidor confirmou o recebimento do evento.
+        default:
+          description: Qualquer resposta que não seja 2xx não confirma a entrega.
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Uso de API Key vinculada a uma conta, conforme o PRD. O cabeçalho
+        X-API-Key é uma proposta pendente de confirmação; ver contracts.md.
+        Chaves são provisionadas e revogadas pelo operador fora desta API.
+
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      description: Identificador opaco do job.
+      schema:
+        type: string
+        minLength: 1
+        examples:
+          - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+
+  responses:
+    Unauthorized:
+      description: API Key ausente, inválida ou revogada.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            unauthorized:
+              value:
+                type: about:blank
+                title: Autenticação necessária
+                status: 401
+                code: UNAUTHORIZED
+    Forbidden:
+      description: API Key ativa, mas sem escopo para a operação.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            forbidden:
+              value:
+                type: about:blank
+                title: Permissão insuficiente
+                status: 403
+                code: FORBIDDEN
+    NotFound:
+      description: Job inexistente, expirado ou pertencente a outra conta.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            notFound:
+              value:
+                type: about:blank
+                title: Recurso não encontrado
+                status: 404
+                code: NOT_FOUND
+    InternalServerError:
+      description: Falha inesperada; detalhes internos não são expostos.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            internalError:
+              value:
+                type: about:blank
+                title: Erro interno
+                status: 500
+                code: INTERNAL_ERROR
+
+  schemas:
+    CreateTranscriptionRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - sourceUrl
+      properties:
+        sourceUrl:
+          type: string
+          format: uri
+          pattern: '^https://'
+          description: URL assinada HTTPS de download. A URL não deve ser registrada em logs.
+          examples:
+            - https://media.example.test/signed/arquivo.mp4?sig=not-a-real-signature
+        clientReference:
+          type: string
+          description: Referência opaca controlada pelo consumidor; o Whisper não interpreta seu significado.
+          examples:
+            - asset-7891
+
+    CreateTranscriptionResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - jobId
+        - status
+        - createdAt
+        - statusUrl
+      properties:
+        jobId:
+          type: string
+          description: Identificador opaco do job.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        status:
+          $ref: '#/components/schemas/TranscriptionStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: Instante de criação em UTC.
+          examples:
+            - '2026-09-28T14:30:00Z'
+        statusUrl:
+          type: string
+          format: uri-reference
+          description: Caminho para consultar o estado do job.
+          examples:
+            - /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        clientReference:
+          type: string
+          description: Presente somente se enviado na criação.
+          examples:
+            - asset-7891
+
+    TranscriptionJob:
+      type: object
+      additionalProperties: false
+      required:
+        - jobId
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        jobId:
+          type: string
+          description: Identificador opaco do job.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        status:
+          $ref: '#/components/schemas/TranscriptionStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: Instante de criação em UTC.
+          examples:
+            - '2026-09-28T14:30:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          description: Instante da última atualização pública do job em UTC.
+          examples:
+            - '2026-09-28T14:34:12Z'
+        terminalAt:
+          type: string
+          format: date-time
+          description: Instante em que o job entrou em estado terminal; inicia a janela de retenção de até 24 horas.
+          examples:
+            - '2026-09-28T14:36:02Z'
+        clientReference:
+          type: string
+          description: Presente somente se enviado na criação.
+          examples:
+            - asset-7891
+        failure:
+          $ref: '#/components/schemas/TranscriptionFailure'
+
+    TranscriptionStatus:
+      type: string
+      enum:
+        - downloading
+        - queued
+        - processing
+        - completed
+        - failed
+      description: Estados públicos do ciclo de vida, na ordem em que podem ocorrer.
+      examples:
+        - downloading
+
+    TranscriptionFailure:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      description: Resumo seguro; não contém URL assinada, credenciais ou detalhes internos do provedor.
+      properties:
+        code:
+          type: string
+          enum:
+            - SOURCE_UNAVAILABLE
+            - MEDIA_DURATION_LIMIT_EXCEEDED
+            - UNSUPPORTED_MEDIA_FORMAT
+            - TRANSCRIPTION_FAILED
+          description: Código estável para tratamento pelo consumidor.
+          examples:
+            - SOURCE_UNAVAILABLE
+        message:
+          type: string
+          description: Resumo legível da falha sem dados secretos ou internos.
+          examples:
+            - Não foi possível obter a mídia na origem.
+
+    TranscriptionResult:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - jobId
+        - language
+        - durationMs
+        - segments
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+          description: Versão do schema do resultado, independente do motor de transcrição.
+          examples:
+            - 1
+        jobId:
+          type: string
+          description: Identificador opaco do job que originou o resultado.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        language:
+          type: string
+          const: pt-BR
+          description: Idioma do resultado neste primeiro corte.
+          examples:
+            - pt-BR
+        durationMs:
+          type: integer
+          minimum: 0
+          description: Duração da mídia em milissegundos.
+          examples:
+            - 3600000
+        segments:
+          type: array
+          description: Segmentos com tempos relativos ao início da mídia.
+          items:
+            $ref: '#/components/schemas/TranscriptionSegment'
+
+    TranscriptionSegment:
+      type: object
+      additionalProperties: false
+      required:
+        - startMs
+        - endMs
+        - text
+      properties:
+        startMs:
+          type: integer
+          minimum: 0
+          description: Início do segmento em milissegundos desde o início da mídia.
+          examples:
+            - 1240
+        endMs:
+          type: integer
+          minimum: 0
+          description: Fim do segmento em milissegundos desde o início da mídia.
+          examples:
+            - 4100
+        text:
+          type: string
+          description: Texto transcrito no segmento.
+          examples:
+            - Exemplo de transcrição.
+
+    TranscriptionTerminalEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - eventId
+        - jobId
+        - status
+      description: Aviso mínimo de estado terminal; não contém mídia nem resultado.
+      properties:
+        eventId:
+          type: string
+          description: Identificador estável entre as retentativas do mesmo evento.
+          examples:
+            - evt_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        jobId:
+          type: string
+          description: Identificador opaco do job terminal.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        status:
+          type: string
+          enum:
+            - completed
+            - failed
+          description: Estado terminal do job.
+          examples:
+            - completed
+        clientReference:
+          type: string
+          description: Presente somente se enviado na criação do job.
+          examples:
+            - asset-7891
+
+    Problem:
+      type: object
+      additionalProperties: true
+      required:
+        - type
+        - title
+        - status
+      description: Erro no formato RFC 9457, com campos de extensão do contrato.
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Identificador do tipo de problema; about:blank usa o status HTTP como tipo.
+          examples:
+            - about:blank
+        title:
+          type: string
+          description: Resumo legível do problema.
+          examples:
+            - Recurso não encontrado
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+          description: Código HTTP desta resposta.
+          examples:
+            - 404
+        detail:
+          type: string
+          description: Explicação segura e específica para esta ocorrência.
+          examples:
+            - O recurso não está disponível.
+        instance:
+          type: string
+          format: uri-reference
+          description: Caminho da operação que gerou o problema.
+          examples:
+            - /v1/transcriptions
+        code:
+          type: string
+          description: Código estável para tratamento programático pelo consumidor.
+          examples:
+            - NOT_FOUND
+        traceId:
+          type: string
+          description: Identificador de correlação que não contém mídia, credenciais ou URL assinada.
+          examples:
+            - 00-9f2b5d6c4e7a8b90123456789abcdef0-0123456789abcdef-01

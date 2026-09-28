@@ -1,0 +1,87 @@
+{
+  "schema": "tsg-flow-state/1",
+  "product": "whisper",
+  "updated": "2026-09-28",
+  "artifacts": {
+    "vision": "vision.md",
+    "domain-map": "context/domain-map.md",
+    "architecture-baseline": "context/architecture-baseline.md"
+  },
+  "foundation": {
+    "status": "pending",
+    "services": [],
+    "platform_ready": false
+  },
+  "capability_stages": [
+    "backlog",
+    "domain",
+    "prd",
+    "techspec",
+    "contract",
+    "tasks",
+    "in_progress",
+    "done",
+    "descartada"
+  ],
+  "capabilities": [],
+  "next_actions": [
+    {
+      "id": "NA1",
+      "what": "Prosseguir com a TechSpec usando o baseline; fechar OD1-OD7 antes de aprovar contratos e tarefas de implementação ou iniciar o piloto.",
+      "skill": "tsg-flow-techspec-creator",
+      "blocked_by": []
+    }
+  ],
+  "open_decisions": [
+    {
+      "id": "OD1",
+      "ref": "docs/plano-api-transcricao.md — armazenamento temporário",
+      "what": "Escolher o backend privado para mídia temporária e resultado, com limites de capacidade e garantias de expurgo.",
+      "owner": "arquitetura e operação",
+      "blocks": []
+    },
+    {
+      "id": "OD2",
+      "ref": "tasks/prd-api-transcricao-assincrona/prd.md — Restrições Técnicas de Alto Nível e Questões em Aberto",
+      "what": "Definir limite em bytes, formatos, pico de jobs simultâneos e metas de início e conclusão; validar capacidade por benchmark.",
+      "owner": "produto e operação",
+      "blocks": []
+    },
+    {
+      "id": "OD3",
+      "ref": "tasks/prd-api-transcricao-assincrona/contracts.md — Origem e decisões",
+      "what": "Definir como o primeiro consumidor obterá uma URL HTTPS assinada de leitura autorizada para a mídia.",
+      "owner": "plataforma e integração do consumidor",
+      "blocks": []
+    },
+    {
+      "id": "OD4",
+      "ref": "tasks/prd-api-transcricao-assincrona/prd.md — Questões em Aberto",
+      "what": "Definir validade mínima da URL assinada e política de retentativa do download.",
+      "owner": "produto e primeiro cliente",
+      "blocks": []
+    },
+    {
+      "id": "OD5",
+      "ref": "tasks/prd-api-transcricao-assincrona/contracts.md — Pendências para aprovação",
+      "what": "Definir janela e limite de retentativas do webhook e protocolo de assinatura, incluindo proteção contra replay.",
+      "owner": "produto, operação e segurança",
+      "blocks": []
+    },
+    {
+      "id": "OD6",
+      "ref": "tasks/prd-api-transcricao-assincrona/contracts.md — Pendências para aprovação",
+      "what": "Definir retenção da chave de idempotência e regra de equivalência do payload repetido.",
+      "owner": "produto e arquitetura",
+      "blocks": []
+    },
+    {
+      "id": "OD7",
+      "ref": "tasks/prd-api-transcricao-assincrona/contracts.md — Pendências para aprovação",
+      "what": "Confirmar o cabeçalho de API Key que será adotado pelo cliente e pela API.",
+      "owner": "produto e primeiro cliente",
+      "blocks": []
+    }
+  ],
+  "decisions": []
+}

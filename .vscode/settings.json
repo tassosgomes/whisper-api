@@ -1,0 +1,3 @@
+{
+    "window.title": "${dirty}${activeEditorShort}${separator}whisper${separator}${profileName}${separator}${appName}"
+}
