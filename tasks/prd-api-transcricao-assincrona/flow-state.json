@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "branch": "feature/api-transcricao-assincrona",
+  "original_base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
+  "base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
+  "target_ref": null,
+  "last_checkpoint": null,
+  "phase": "checkpoint",
+  "active_task": "1.0",
+  "attempt": 3,
+  "max_attempts": 3,
+  "full_attempt": 0,
+  "transport_retries": 1,
+  "routing_override": "dono impôs validator=codex em 2026-09-28 (claude sem cota); --kind=codex por chamada",
+  "specs": ["techspec.md"],
+  "delivery": "pr",
+  "worktree": "/home/tsgomes/github-tassosgomes/whisper-api-transcricao-flow",
+  "plan_approved": "2026-09-28 pelo dono; atualizar tasks.md no primeiro checkpoint",
+  "validated_commit": null,
+  "validated_tree": null,
+  "last_result": {
+    "run_id": "run.zACmL4df",
+    "role": "implementer",
+    "mode": "fix",
+    "task": "1.0",
+    "attempt": "3/3",
+    "outcome": "implementation_complete",
+    "gate": "passed",
+    "note": "techspec.md alinhado com autorização do dono; redelegate após transporte run.28yY7ohG (claude sem cota)"
+  },
+  "pending_delegation": {
+    "role": "validator",
+    "mode": "revalidation",
+    "task": "1.0",
+    "attempt": "3/3"
+  },
+  "history": [
+    {
+      "event": "flow_start",
+      "detail": "worktree nova whisper-api-transcricao-flow; branch reutilizada; plano aprovado pelo dono; delivery=pr"
+    },
+    {
+      "event": "task_1.0_implement_complete",
+      "detail": "run.leNLNSEv gate spectral exit 0, 0 erros; diff em api-contract.yaml/md + contracts.md"
+    },
+    {
+      "event": "transport_failure_validator",
+      "detail": "run.5mHBASQl claude agent_not_ready (diálogo de confiança da worktree nova; aceito); dono informou claude sem cota e impôs codex para validator"
+    }
+  ]
+}

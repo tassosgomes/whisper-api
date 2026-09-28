@@ -3,7 +3,7 @@
 > **TechSpec de origem:** [techspec.md](techspec.md), aprovada em 2026-09-28  
 > **Escopo:** Backend  
 > **ADRs pertinentes:** [ADR-001](../../docs/adr/adr-001.md), [ADR-002](../../docs/adr/adr-002.md)  
-> **Status do plano:** Em revisão
+> **Status do plano:** Aprovado em 2026-09-28
 
 ## Visão Geral
 
@@ -43,7 +43,7 @@ V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso a
 
 ## Tasks
 
-- [ ] 1.0 Atualizar e aprovar o contrato HTTP público
+- [x] 1.0 Atualizar e aprovar o contrato HTTP público
 - [ ] 2.0 Registrar o procedimento operacional do piloto
 - [ ] 3.0 Publicar o acordo de integração do primeiro consumidor
 - [ ] 4.0 Autenticar e isolar chamadas por conta e credencial
