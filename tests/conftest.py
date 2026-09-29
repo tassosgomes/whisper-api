@@ -27,7 +27,9 @@ from app.main import app
 
 
 TEST_SOURCE_URL_ENCRYPTION_KEY = "1a" * 32
+TEST_WEBHOOK_SECRET_ENCRYPTION_KEY = "2b" * 32
 TEST_SOURCE_HOST = "media.example.test"
+TEST_WEBHOOK_HOST = "webhook.example.test"
 TEST_SOURCE_IP = "93.184.216.34"
 TEST_S3_BUCKET = "whisper-test"
 
@@ -113,7 +115,7 @@ def controlled_origin_certificate(
             "-subj",
             f"/CN={TEST_SOURCE_HOST}",
             "-addext",
-            f"subjectAltName=DNS:{TEST_SOURCE_HOST}",
+            f"subjectAltName=DNS:{TEST_SOURCE_HOST},DNS:{TEST_WEBHOOK_HOST}",
         ],
         check=True,
         capture_output=True,
@@ -265,6 +267,9 @@ def all_roles_client(
     """Boot the real API + worker role composition in one process."""
     monkeypatch.setenv("DATABASE_URL", test_database_url())
     monkeypatch.setenv("SOURCE_URL_ENCRYPTION_KEY", TEST_SOURCE_URL_ENCRYPTION_KEY)
+    monkeypatch.setenv(
+        "WEBHOOK_SECRET_ENCRYPTION_KEY", TEST_WEBHOOK_SECRET_ENCRYPTION_KEY
+    )
     monkeypatch.setenv("APP_ROLE", "all")
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")
@@ -310,6 +315,9 @@ def client(
 ):
     monkeypatch.setenv("DATABASE_URL", test_database_url())
     monkeypatch.setenv("SOURCE_URL_ENCRYPTION_KEY", TEST_SOURCE_URL_ENCRYPTION_KEY)
+    monkeypatch.setenv(
+        "WEBHOOK_SECRET_ENCRYPTION_KEY", TEST_WEBHOOK_SECRET_ENCRYPTION_KEY
+    )
     monkeypatch.setenv("APP_ROLE", "api")
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")

@@ -17,6 +17,7 @@ from app.database import create_database_engine, database_url_from_env, upgrade_
 from app.jobs.executor import JobManager
 from app.jobs.security import SourceURLCipher
 from app.jobs.worker import JobWorker
+from app.jobs.webhooks import NotificationDispatcher, WebhookSecretCipher
 from app.monitoring.metrics import DownloadStartMetrics, JobProcessingMetrics
 from app.storage.s3 import S3ObjectStore
 from app.transcription.source import SourceConnector
@@ -34,6 +35,7 @@ class Settings:
     JOB_CONCURRENCY: int
     DATABASE_URL: str
     SOURCE_URL_ENCRYPTION_KEY: str
+    WEBHOOK_SECRET_ENCRYPTION_KEY: str | None
     ROLE: str
     S3_BUCKET: str
     S3_REGION: str
@@ -53,6 +55,8 @@ class Settings:
             JOB_CONCURRENCY=int(os.getenv("JOB_CONCURRENCY", "1")),
             DATABASE_URL=database_url_from_env(),
             SOURCE_URL_ENCRYPTION_KEY=os.getenv("SOURCE_URL_ENCRYPTION_KEY", ""),
+            WEBHOOK_SECRET_ENCRYPTION_KEY=os.getenv("WEBHOOK_SECRET_ENCRYPTION_KEY")
+            or None,
             ROLE=os.getenv("APP_ROLE", "api").casefold(),
             S3_BUCKET=os.getenv("S3_BUCKET", "whisper-temporary"),
             S3_REGION=os.getenv("S3_REGION", "us-east-1"),
@@ -86,6 +90,13 @@ async def lifespan(application: FastAPI):
         application.state.source_url_cipher = source_url_cipher
         application.state.download_metrics = DownloadStartMetrics()
         application.state.job_metrics = JobProcessingMetrics()
+        webhook_secret_cipher = WebhookSecretCipher.from_hex(
+            settings.WEBHOOK_SECRET_ENCRYPTION_KEY
+        )
+        application.state.webhook_secret_cipher = webhook_secret_cipher
+        application.state.notification_dispatcher = NotificationDispatcher(
+            database_engine, webhook_secret_cipher, application.state.job_metrics
+        )
         application.state.model_loaded = False
         application.state.jobs = None
         application.state.source_connector = SourceConnector()
@@ -120,6 +131,7 @@ async def lifespan(application: FastAPI):
                 application.state.object_store,
                 application.state.transcriber,
                 application.state.job_metrics,
+                notification_dispatcher=application.state.notification_dispatcher,
             )
             application.state.worker.start()
             application.state.model_loaded = True

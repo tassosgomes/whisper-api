@@ -65,6 +65,10 @@ class JobProcessingMetrics:
         self._peak_cpu_percent = 0.0
         self._peak_memory_mb = 0.0
         self._peak_threads = 0
+        self._notification_attempts = 0
+        self._notification_outcomes: Counter[str] = Counter()
+        self._notification_retry_delay_seconds_total = 0.0
+        self._notification_retry_delay_seconds_max = 0.0
 
     def increment(self, name: str) -> None:
         with self._lock:
@@ -104,6 +108,20 @@ class JobProcessingMetrics:
             )
             self._peak_threads = max(self._peak_threads, int(summary["peakThreads"]))
 
+    def observe_notification_attempt(
+        self, outcome: str, *, retry_delay_seconds: float | None = None
+    ) -> None:
+        """Aggregate delivery outcomes and delays without event or account labels."""
+        with self._lock:
+            self._notification_attempts += 1
+            self._notification_outcomes[outcome] += 1
+            if retry_delay_seconds is not None:
+                delay = max(0.0, retry_delay_seconds)
+                self._notification_retry_delay_seconds_total += delay
+                self._notification_retry_delay_seconds_max = max(
+                    self._notification_retry_delay_seconds_max, delay
+                )
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
@@ -125,6 +143,12 @@ class JobProcessingMetrics:
                     "peakCpuPercent": round(self._peak_cpu_percent, 2),
                     "peakMemoryMb": round(self._peak_memory_mb, 2),
                     "peakThreads": self._peak_threads,
+                },
+                "notifications": {
+                    "attempts": self._notification_attempts,
+                    "outcomes": dict(self._notification_outcomes),
+                    "retryDelaySecondsTotal": self._notification_retry_delay_seconds_total,
+                    "retryDelaySecondsMax": self._notification_retry_delay_seconds_max,
                 },
             }
 

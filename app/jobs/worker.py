@@ -26,6 +26,7 @@ from app.jobs.retention import (
     delay_until_next_scan,
 )
 from app.jobs.security import SourceURLCipher
+from app.jobs.webhooks import NotificationDispatcher, persist_terminal_event
 from app.monitoring.metrics import JobProcessingMetrics, ResourceSampler
 from app.service import public_result_payload
 from app.storage.s3 import S3ObjectStore
@@ -68,6 +69,7 @@ class JobWorker:
         *,
         sleeper=time.sleep,
         jitter=random.uniform,
+        notification_dispatcher: NotificationDispatcher | None = None,
     ) -> None:
         self._sessions = sessionmaker(bind=engine, expire_on_commit=False)
         self._source_url_cipher = source_url_cipher
@@ -77,6 +79,7 @@ class JobWorker:
         self._metrics = metrics
         self._sleep = sleeper
         self._jitter = jitter
+        self._notification_dispatcher = notification_dispatcher
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
 
@@ -107,9 +110,13 @@ class JobWorker:
         )
         for thread in self._threads:
             thread.start()
+        if self._notification_dispatcher is not None:
+            self._notification_dispatcher.start()
 
     def shutdown(self) -> None:
         self._stop.set()
+        if self._notification_dispatcher is not None:
+            self._notification_dispatcher.shutdown()
         for thread in self._threads:
             thread.join(timeout=READ_SHUTDOWN_TIMEOUT_SECONDS)
         self._threads.clear()
@@ -588,6 +595,10 @@ class JobWorker:
                 )
                 .returning(TranscriptionJob.id, TranscriptionJob.accepted_at)
             ).one_or_none()
+            if transition is not None:
+                job = session.get(TranscriptionJob, job_id)
+                if job is not None:
+                    persist_terminal_event(session, job, now)
         if transition is None:
             return False
         accepted_at = transition[1]
@@ -620,6 +631,10 @@ class JobWorker:
                 )
                 .returning(TranscriptionJob.id, TranscriptionJob.accepted_at)
             ).one_or_none()
+            if transition is not None:
+                job = session.get(TranscriptionJob, job_id)
+                if job is not None:
+                    persist_terminal_event(session, job, now)
         if transition is not None:
             self._metrics.increment(f"{stage}Failed")
             self._metrics.observe_failure(stage, code)

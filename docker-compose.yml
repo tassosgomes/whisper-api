@@ -70,6 +70,7 @@ services:
       DATABASE_USER: ${POSTGRES_USER:-whisper}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-local-placeholder-only}
       SOURCE_URL_ENCRYPTION_KEY: ${SOURCE_URL_ENCRYPTION_KEY:-}
+      WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-}
       S3_BUCKET: ${S3_BUCKET:-whisper-temporary}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ENDPOINT_URL: http://minio:9000
@@ -115,6 +116,7 @@ services:
       DATABASE_USER: ${POSTGRES_USER:-whisper}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-local-placeholder-only}
       SOURCE_URL_ENCRYPTION_KEY: ${SOURCE_URL_ENCRYPTION_KEY:-}
+      WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-}
       S3_BUCKET: ${S3_BUCKET:-whisper-temporary}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ENDPOINT_URL: http://minio:9000

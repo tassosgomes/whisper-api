@@ -155,7 +155,9 @@ models/        snapshots locais de small, medium e large-v3
 
 Mídias, modelos e saídas são ignorados pelo Git. Jobs, estado inicial e chaves
 de idempotência ficam no volume PostgreSQL; URLs de origem são cifradas no
-banco pela `SOURCE_URL_ENCRYPTION_KEY` para sobreviver a reinícios.
+banco pela `SOURCE_URL_ENCRYPTION_KEY` para sobreviver a reinícios. Configure
+uma `WEBHOOK_SECRET_ENCRYPTION_KEY` separada em `.env` para provisionar e
+entregar webhooks; ela cifra o material de assinatura no banco.
 
 ## Operação do piloto
 
@@ -257,7 +259,29 @@ ou expirado retorna `404` neutro. O segredo da API Key não é o segredo
 
 Independente da API Key, por conta:
 
-1. Cadastre um destino HTTPS por conta (URL do callback vem da configuração
+1. Gere uma chave de cifragem diferente da `SOURCE_URL_ENCRYPTION_KEY` e
+   configure `WEBHOOK_SECRET_ENCRYPTION_KEY` em `.env` antes de provisionar
+   webhooks. Gere o material inicial e valide o destino pelo CLI. O comando
+   imprime o segredo uma única vez; entregue o campo `webhookSecret` ao cliente
+   por canal seguro:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli webhook configure \
+     --account-id <account-id> --url https://cliente.example/webhooks/transcription
+   ```
+
+   Para trocar somente o callback, preserve o segredo e configure o novo destino:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli webhook set-endpoint \
+     --account-id <account-id> --url https://novo-cliente.example/webhooks/transcription
+   ```
+
+   `configure` e `set-endpoint` aceitam somente HTTPS e rejeitam nomes que
+   resolvam para loopback, redes privadas, link-local ou metadados. A entrega
+   repete a validação e fixa a conexão ao endereço público aprovado.
+
+2. Cadastre um destino HTTPS por conta (URL do callback vem da configuração
    do operador, nunca do job). Exija HTTPS e valide destino e
    redirecionamentos contra SSRF (sem loopback, redes privadas, link-local
    ou metadados), conforme o baseline. Quando o receptor mudar, valide a nova
@@ -267,21 +291,33 @@ Independente da API Key, por conta:
    ou reentregar o material de assinatura: mantenha a chave e o material
    atuais. As entregas seguintes usam a URL atualizada. Se também for necessário
    trocar o material de assinatura, faça essa operação separadamente.
-2. Gere material de assinatura de alta entropia, único por destino
+3. O CLI gera material de assinatura de alta entropia, único por destino
    (recomendação Standard Webhooks: 24 a 64 bytes, formato identificável
    `whsec_` em Base64). Guarde-o em armazenamento de segredos; somente a
    Entrega de Notificações o lê para assinar. Nunca o inclua em payload,
    log ou erro.
-3. Entregue o material ao cliente uma única vez, como na seção 2. O evento
+4. Entregue o material ao cliente uma única vez, como na seção 2. O evento
    usa Standard Webhooks v1 (`webhook-id` estável por evento,
    `webhook-timestamp` renovado por tentativa, `webhook-signature`
    `v1,<base64(HMAC-SHA256(segredo, id + "." + timestamp + "." + corpo))>`),
    tolerância de ±300 s e deduplicação pelo ID por 72 h.
-4. Rotação planejada: cadastre o novo material mantendo o antigo válido e
-   assine com os dois segredos por 72 horas (janela máxima de retry); depois
-   remova o antigo. Comprometimento: revogue o material antigo imediatamente,
-   sem sobreposição, e emita material novo.
-5. Códigos do destino: `2xx` encerra a entrega; `3xx` é falha sem
+5. Rotação planejada: emita o material novo mantendo o antigo válido e assine
+   com ambos por 72 horas. O segredo novo é exibido uma vez:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli webhook rotate \
+     --account-id <account-id>
+   ```
+
+   Em caso de comprometimento, revogue o anterior imediatamente:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli webhook rotate \
+     --account-id <account-id> --immediate
+   ```
+
+   Para desativar o destino e revogar os materiais ativos, use `webhook disable`.
+6. Códigos do destino: `2xx` encerra a entrega; `3xx` é falha sem
    redirecionamento; `410` desativa o destino; `429` reduz o ritmo
    (considerar `Retry-After`). Retentativas de falhas transitórias seguem por
    até 72 h com backoff exponencial e jitter, sem alterar o estado do job.
