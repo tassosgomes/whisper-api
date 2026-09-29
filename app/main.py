@@ -8,13 +8,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.access.credentials import CredentialStore
 from app.api.transcriptions import router
 from app.database import create_database_engine, database_url_from_env, upgrade_database
 from app.jobs.executor import JobManager
+from app.jobs.security import SourceURLCipher
+from app.monitoring.metrics import DownloadStartMetrics
 from app.transcription.whisper import Transcriber
+from app.transcription.source import SourceConnector
 
 
 @dataclass(frozen=True)
@@ -27,6 +31,7 @@ class Settings:
     WHISPER_THREADS: int
     JOB_CONCURRENCY: int
     DATABASE_URL: str
+    SOURCE_URL_ENCRYPTION_KEY: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -39,6 +44,7 @@ class Settings:
             WHISPER_THREADS=int(os.getenv("WHISPER_THREADS", "8")),
             JOB_CONCURRENCY=int(os.getenv("JOB_CONCURRENCY", "1")),
             DATABASE_URL=database_url_from_env(),
+            SOURCE_URL_ENCRYPTION_KEY=os.getenv("SOURCE_URL_ENCRYPTION_KEY", ""),
         )
         if settings.WHISPER_DEVICE != "cpu" or settings.WHISPER_COMPUTE_TYPE != "int8":
             raise ValueError(
@@ -60,6 +66,9 @@ async def lifespan(application: FastAPI):
         upgrade_database(database_engine)
         application.state.database_engine = database_engine
         application.state.credential_store = CredentialStore(database_engine)
+        source_url_cipher = SourceURLCipher.from_hex(settings.SOURCE_URL_ENCRYPTION_KEY)
+        application.state.source_url_cipher = source_url_cipher
+        application.state.download_metrics = DownloadStartMetrics()
         application.state.model_loaded = False
         application.state.jobs = None
         application.state.transcriber = Transcriber(
@@ -67,7 +76,12 @@ async def lifespan(application: FastAPI):
             model_name=settings.WHISPER_MODEL_NAME,
             cpu_threads=settings.WHISPER_THREADS,
         )
-        application.state.jobs = JobManager()
+        application.state.jobs = JobManager(
+            database_engine,
+            source_url_cipher,
+            SourceConnector(),
+            application.state.download_metrics,
+        )
         application.state.model_loaded = True
         yield
     finally:
@@ -85,39 +99,89 @@ app = FastAPI(title="Meeting Transcriber PoC", lifespan=lifespan)
 async def http_exception_to_problem(
     request: Request, exc: HTTPException
 ) -> JSONResponse:
-    """Render 401/404 as RFC 9457 problem+json per api-contract.yaml."""
-    if exc.status_code == status.HTTP_401_UNAUTHORIZED:
-        detail = exc.detail if isinstance(exc.detail, str) else "Credencial inválida."
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={
-                "type": "about:blank",
-                "title": "Autenticação necessária",
-                "status": status.HTTP_401_UNAUTHORIZED,
-                "code": "UNAUTHORIZED",
-                "detail": detail,
-            },
-            media_type="application/problem+json",
-            headers=exc.headers,
-        )
-    if exc.status_code == status.HTTP_404_NOT_FOUND:
-        detail = exc.detail if isinstance(exc.detail, str) else "Job não encontrado."
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={
-                "type": "about:blank",
-                "title": "Recurso não encontrado",
-                "status": status.HTTP_404_NOT_FOUND,
-                "code": "NOT_FOUND",
-                "detail": detail,
-            },
-            media_type="application/problem+json",
-            headers=exc.headers,
-        )
+    """Render contract errors as safe RFC 9457 Problem Details."""
+    defaults = {
+        status.HTTP_400_BAD_REQUEST: (
+            "Solicitação inválida",
+            "INVALID_REQUEST",
+            "A solicitação não pôde ser processada.",
+        ),
+        status.HTTP_401_UNAUTHORIZED: (
+            "Autenticação necessária",
+            "UNAUTHORIZED",
+            "Credencial inválida.",
+        ),
+        status.HTTP_404_NOT_FOUND: (
+            "Recurso não encontrado",
+            "NOT_FOUND",
+            "Job não encontrado.",
+        ),
+        status.HTTP_409_CONFLICT: (
+            "Conflito",
+            "CONFLICT",
+            "A solicitação conflita com o estado atual.",
+        ),
+        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: (
+            "Mídia acima do limite",
+            "MEDIA_SIZE_LIMIT_EXCEEDED",
+            "A mídia excede o limite permitido.",
+        ),
+        status.HTTP_422_UNPROCESSABLE_ENTITY: (
+            "Solicitação inválida",
+            "INVALID_REQUEST",
+            "A solicitação não pôde ser processada.",
+        ),
+        status.HTTP_500_INTERNAL_SERVER_ERROR: (
+            "Erro interno",
+            "INTERNAL_ERROR",
+            "A solicitação não pôde ser concluída.",
+        ),
+    }
+    title, code, detail = defaults.get(
+        exc.status_code, ("Erro HTTP", "HTTP_ERROR", "A solicitação falhou.")
+    )
+    if isinstance(exc.detail, dict):
+        title = exc.detail.get("title", title)
+        code = exc.detail.get("code", code)
+        detail = exc.detail.get("detail", detail)
+    elif exc.status_code not in {
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_404_NOT_FOUND,
+    } and isinstance(exc.detail, str):
+        detail = exc.detail
+    problem = {
+        "type": "about:blank",
+        "title": title,
+        "status": exc.status_code,
+        "code": code,
+        "detail": detail,
+    }
+    if exc.status_code != status.HTTP_404_NOT_FOUND:
+        problem["instance"] = request.url.path
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content=problem,
+        media_type="application/problem+json",
         headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_to_problem(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Hide Pydantic input values, which may include signed source URLs."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "type": "about:blank",
+            "title": "Solicitação inválida",
+            "status": status.HTTP_400_BAD_REQUEST,
+            "code": "INVALID_REQUEST",
+            "detail": "O corpo ou os parâmetros obrigatórios são inválidos.",
+            "instance": request.url.path,
+        },
+        media_type="application/problem+json",
     )
 
 

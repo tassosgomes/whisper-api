@@ -12,6 +12,7 @@ Copie o arquivo de configuração e confira os diretórios locais:
 
 ```bash
 cp .env.example .env
+printf 'SOURCE_URL_ENCRYPTION_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
 ```
 
 O Compose publica a API somente em `127.0.0.1:8000`. Por padrão, usa o modelo `medium`, limita o container a oito CPUs e define o mesmo número de threads de inferência. Os arquivos de entrada ficam somente leitura no container; os resultados são gravados em `data/output`.
@@ -19,7 +20,9 @@ O Compose publica a API somente em `127.0.0.1:8000`. Por padrão, usa o modelo `
 O Compose inicia PostgreSQL com volume próprio; a API aguarda o banco saudável
 e aplica as migrations Alembic ao iniciar. Credenciais de conexão vêm das
 variáveis de ambiente do `.env`. O arquivo `.env.example` contém somente
-valores locais de exemplo, não segredos de implantação.
+valores locais de exemplo, não segredos de implantação. A chave
+`SOURCE_URL_ENCRYPTION_KEY` cifrará URLs assinadas persistidas para permitir
+retomada do job; mantenha-a no `.env` e preserve-a junto aos backups do banco.
 
 Se o usuário do host não tiver UID/GID `1000`, ajuste `LOCAL_UID` e `LOCAL_GID` em `.env` para os valores de `id -u` e `id -g`. Isso permite que o container grave os artefatos com a propriedade correta.
 
@@ -47,7 +50,7 @@ Os modelos ficam em `models/small`, `models/medium` e `models/large-v3`. O servi
 
 ## Iniciar a API
 
-Com o modelo configurado em `.env` já preparado:
+Com o modelo configurado e os modelos baixados:
 
 ```bash
 docker compose up --build -d transcriber
@@ -59,23 +62,29 @@ Confira a prontidão do modelo:
 curl http://127.0.0.1:8000/health
 ```
 
-O endpoint deve retornar `modelLoaded: true`. A documentação interativa da API fica em <http://127.0.0.1:8000/docs>.
-
-Coloque a mídia em `data/input/` e crie um job usando um caminho relativo. As extensões aceitas são `.mp4`, `.mkv`, `.webm`, `.mp3`, `.wav` e `.m4a`:
+O endpoint deve retornar `modelLoaded: true`. A documentação interativa da API fica em <http://127.0.0.1:8000/docs>. Provisione uma conta e API Key conforme o runbook abaixo e use uma URL HTTPS assinada de leitura:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/transcriptions \
   -H 'Content-Type: application/json' \
-  -d '{"path":"reuniao-arquitetura.mp4"}'
+  -H 'X-API-Key: <api-key>' \
+  -H 'Idempotency-Key: <chave-estavel-por-solicitacao>' \
+  -d '{"sourceUrl":"https://storage.example.test/signed/audio.mp3?token=...", "clientReference":"asset-7891"}'
 ```
 
-A resposta `202 Accepted` inclui o identificador do job. O campo `model` é opcional no POST; se for informado, precisa corresponder ao modelo que já está carregado no container. Para comparar outro modelo, configure `WHISPER_MODEL_NAME` e `WHISPER_MODEL_PATH` e recrie o serviço. Consulte o estado substituindo `<id>` pelo valor retornado:
+A resposta `202 Accepted` inclui `jobId`, estado `downloading`, `statusUrl` e
+`Location`, depois que o serviço inicia o GET à origem. Repetir o mesmo JSON
+semântico com a mesma `Idempotency-Key` por 120 segundos devolve o mesmo job;
+reutilizar a chave com outro conteúdo retorna `409 IDEMPOTENCY_KEY_REUSED`.
+Consulte o estado com a mesma API Key:
 
 ```bash
-curl http://127.0.0.1:8000/v1/transcriptions/<id>
+curl http://127.0.0.1:8000/v1/transcriptions/<jobId> \
+  -H 'X-API-Key: <api-key>'
 ```
 
-Ao concluir, o JSON do job informa os nomes dos arquivos em `data/output/`. Cada execução recebe um UUID, formando nomes como `reuniao.<id>.md` e `reuniao.<id>.metrics.json`, para preservar os resultados de benchmarks repetidos. Caminhos absolutos e caminhos que saem de `data/input` são rejeitados.
+O endpoint da API segue o contrato assíncrono; a CLI local continua disponível
+para transcrever arquivos em `data/input/` e gravar artefatos em `data/output/`.
 
 Para parar a API:
 
@@ -144,7 +153,9 @@ data/output/   transcrições Markdown e métricas JSON
 models/        snapshots locais de small, medium e large-v3
 ```
 
-Mídias, modelos e saídas são ignorados pelo Git. Jobs continuam em memória nesta fatia; reiniciar o container apaga seu estado. Contas e verificadores das API Keys ficam no volume próprio do PostgreSQL.
+Mídias, modelos e saídas são ignorados pelo Git. Jobs, estado inicial e chaves
+de idempotência ficam no volume PostgreSQL; URLs de origem são cifradas no
+banco pela `SOURCE_URL_ENCRYPTION_KEY` para sobreviver a reinícios.
 
 ## Operação do piloto
 

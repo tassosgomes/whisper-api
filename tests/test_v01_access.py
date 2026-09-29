@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import text
 
@@ -30,13 +30,14 @@ def _assert_problem(response, *, status_code: int, title: str, code: str) -> dic
 def _create_job(client, api_key: str) -> str:
     response = client.post(
         "/v1/transcriptions",
-        headers={"X-API-Key": api_key},
-        json={"path": "sample.wav"},
+        headers={"X-API-Key": api_key, "Idempotency-Key": str(uuid4())},
+        json={"sourceUrl": client.app.state.test_source_url},
     )
     assert response.status_code == 202
     assert "accountId" not in response.json()
     assert "credentialId" not in response.json()
-    return response.json()["id"]
+    assert "sourceUrl" not in response.json()
+    return response.json()["jobId"]
 
 
 def test_v01_access_provisioning_stores_only_hash_and_metadata(client):
@@ -51,12 +52,16 @@ def test_v01_access_provisioning_stores_only_hash_and_metadata(client):
             text("SELECT key_hash FROM credentials WHERE id = :id"),
             {"id": UUID(metadata["credentialId"])},
         ).one()
-        columns = connection.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'credentials'"
+        columns = (
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'credentials'"
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     assert row.key_hash == hashlib.sha256(api_key.encode("utf-8")).hexdigest()
     assert api_key not in row.key_hash
@@ -73,10 +78,13 @@ def test_v01_access_active_key_authorizes_http_and_records_last_use(client):
     )
 
     assert response.status_code == 200
-    assert response.json()["id"] == job_id
-    assert client.app.state.credential_store.metadata(UUID(metadata["credentialId"]))[
-        "lastUsedAt"
-    ] is not None
+    assert response.json()["jobId"] == job_id
+    assert (
+        client.app.state.credential_store.metadata(UUID(metadata["credentialId"]))[
+            "lastUsedAt"
+        ]
+        is not None
+    )
 
 
 def test_v01_access_missing_invalid_and_revoked_keys_return_safe_401(client):
@@ -94,7 +102,11 @@ def test_v01_access_missing_invalid_and_revoked_keys_return_safe_401(client):
         headers={"X-API-Key": revoked_key},
     )
 
-    assert [missing.status_code, invalid.status_code, revoked.status_code] == [401, 401, 401]
+    assert [missing.status_code, invalid.status_code, revoked.status_code] == [
+        401,
+        401,
+        401,
+    ]
     for response in (missing, invalid, revoked):
         _assert_problem(
             response,
@@ -134,7 +146,7 @@ def test_v01_access_rotation_keeps_credential_and_existing_job_access(client):
     )
     assert old_key not in old_response.text
     assert new_response.status_code == 200
-    assert new_response.json()["id"] == job_id
+    assert new_response.json()["jobId"] == job_id
 
 
 def test_v01_access_other_account_gets_neutral_not_found(client):

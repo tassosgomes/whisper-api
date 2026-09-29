@@ -6,6 +6,7 @@ from alembic import context
 
 from app.access import models as _access_models  # noqa: F401
 from app.database import Base, create_database_engine, database_url_from_env
+from app.jobs import models as _job_models  # noqa: F401
 
 
 config = context.config

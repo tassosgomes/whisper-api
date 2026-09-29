@@ -1,22 +1,26 @@
-"""HTTP endpoints for transcription jobs."""
+"""HTTP endpoints for asynchronous transcription jobs."""
 
-from pathlib import Path
+from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.access.credentials import AuthenticatedCredential
-from app.transcription.paths import resolve_input_path
+from app.jobs.executor import IdempotencyKeyReused
+from app.transcription.paths import InvalidSourceURL, validate_source_url_syntax
+from app.transcription.source import MediaSizeExceeded, SourceUnavailable
 
 
 router = APIRouter()
 
 
 class TranscriptionRequest(BaseModel):
-    path: str = Field(min_length=1)
-    model: str | None = None
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    source_url: Annotated[str, Field(alias="sourceUrl", min_length=1)]
+    client_reference: Annotated[str | None, Field(alias="clientReference")] = None
 
 
 def authenticate_api_key(
@@ -37,30 +41,72 @@ def authenticate_api_key(
 def create_transcription(
     payload: TranscriptionRequest,
     request: Request,
+    response: Response,
     credential: Annotated[AuthenticatedCredential, Depends(authenticate_api_key)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=256)
+    ],
 ) -> dict:
-    settings = request.app.state.settings
-    if payload.model is not None and payload.model != settings.WHISPER_MODEL_NAME:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"O modelo carregado é {settings.WHISPER_MODEL_NAME}.",
-        )
-
     try:
-        resolve_input_path(payload.path, Path(settings.INPUT_DIR))
-    except (ValueError, OSError) as exc:
+        validate_source_url_syntax(payload.source_url)
+        semantic_payload = payload.model_dump(
+            mode="json", by_alias=True, exclude_unset=True
+        )
+        job = request.app.state.jobs.create_or_replay(
+            semantic_payload,
+            source_url=payload.source_url,
+            client_reference=payload.client_reference,
+            idempotency_key=idempotency_key,
+            account_id=credential.account_id,
+            credential_id=credential.credential_id,
+        )
+    except IdempotencyKeyReused:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "title": "Conflito de idempotência",
+                "code": "IDEMPOTENCY_KEY_REUSED",
+                "detail": "A chave já foi usada com outra solicitação.",
+            },
+        ) from None
+    except InvalidSourceURL:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Caminho de entrada inválido ou arquivo indisponível.",
-        ) from exc
+            detail={
+                "title": "URL de origem inválida",
+                "code": "INVALID_SOURCE_URL",
+                "detail": "Informe uma URL HTTPS de origem válida.",
+            },
+        ) from None
+    except MediaSizeExceeded:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={
+                "title": "Mídia acima do limite",
+                "code": "MEDIA_SIZE_LIMIT_EXCEEDED",
+                "detail": "A mídia excede o limite permitido de 5 GiB.",
+            },
+        ) from None
+    except SourceUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "title": "Erro interno",
+                "code": "INTERNAL_ERROR",
+                "detail": "Não foi possível iniciar a conexão com a origem.",
+            },
+        ) from None
 
-    job = request.app.state.jobs.submit(
-        payload.path,
-        request.app.state.transcriber,
-        account_id=str(credential.account_id),
-        credential_id=str(credential.credential_id),
-    )
-    return {"id": job["id"], "status": job["status"], "input": job["input"]}
+    response.headers["Location"] = job["statusUrl"]
+    accepted = {
+        "jobId": job["jobId"],
+        "status": job["status"],
+        "createdAt": job["createdAt"],
+        "statusUrl": job["statusUrl"],
+    }
+    if "clientReference" in job:
+        accepted["clientReference"] = job["clientReference"]
+    return accepted
 
 
 @router.get("/v1/transcriptions/{job_id}")
@@ -71,8 +117,8 @@ def get_transcription(
 ) -> dict:
     job = request.app.state.jobs.get(
         job_id,
-        account_id=str(credential.account_id),
-        credential_id=str(credential.credential_id),
+        account_id=credential.account_id,
+        credential_id=credential.credential_id,
     )
     if job is None:
         raise HTTPException(

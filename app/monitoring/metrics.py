@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Event, Thread
 from time import monotonic
+from threading import Lock
 
 import psutil
 
@@ -16,6 +17,32 @@ class ResourceSample:
     cpu_percent: float
     memory_mb: float
     threads: int
+
+
+class DownloadStartMetrics:
+    """Process-local aggregate for time from API admission to source connection."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._count = 0
+        self._duration_seconds_total = 0.0
+        self._duration_seconds_max = 0.0
+
+    def observe_start(self, duration_seconds: float) -> None:
+        with self._lock:
+            self._count += 1
+            self._duration_seconds_total += duration_seconds
+            self._duration_seconds_max = max(
+                self._duration_seconds_max, duration_seconds
+            )
+
+    def snapshot(self) -> dict[str, float | int]:
+        with self._lock:
+            return {
+                "downloadStartCount": self._count,
+                "downloadStartSecondsTotal": self._duration_seconds_total,
+                "downloadStartSecondsMax": self._duration_seconds_max,
+            }
 
 
 class ResourceSampler:
