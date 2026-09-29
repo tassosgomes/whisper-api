@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: enabling
 blocked_by: []
 gate: "rtk rg -q '^## Operação do piloto$' README.md"
@@ -42,6 +42,6 @@ Seguir `techspec.md#v-01`, `techspec.md#v-05` e ADR-002. O segredo de API Key n�
 
 ## Pronto quando
 
-- [ ] O operador consegue seguir o runbook para provisionar, consultar metadados, rotacionar e revogar sem revelar um segredo já entregue.
-- [ ] Cadastro e rotação do destino/segredo de webhook são independentes da API Key, com comportamento de comprometimento descrito.
-- [ ] O gate estático passa com exit 0.
+- [x] O operador consegue seguir o runbook para provisionar, consultar metadados, rotacionar e revogar sem revelar um segredo já entregue.
+- [x] Cadastro e rotação do destino/segredo de webhook são independentes da API Key, com comportamento de comprometimento descrito.
+- [x] O gate estático passa com exit 0.

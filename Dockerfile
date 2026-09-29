@@ -13,6 +13,8 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY alembic.ini ./
+COPY migrations ./migrations
 COPY scripts ./scripts
 
 RUN python -m pip install --upgrade pip==25.1.1 \

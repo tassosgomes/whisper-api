@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: enabling
 blocked_by: [1.0]
 gate: "rtk rg -q '^## Integração com code-for-coders$' README.md"
@@ -43,7 +43,7 @@ Seguir Q-03/Q-04 e `techspec.md#interfaces-entre-fatias-ou-times`; URL GET de le
 
 ## Pronto quando
 
-- [ ] O guia permite ao primeiro consumidor preparar a URL de leitura, criar e acompanhar um job e buscar o resultado pelo destino público.
-- [ ] A validação da assinatura, a deduplicação e a reação a falha definitiva de origem estão descritas sem depender de conceitos internos do consumidor.
-- [ ] A dependência de implementação no code-for-coders está explícita antes do piloto integrado.
-- [ ] O gate estático passa com exit 0.
+- [x] O guia permite ao primeiro consumidor preparar a URL de leitura, criar e acompanhar um job e buscar o resultado pelo destino público.
+- [x] A validação da assinatura, a deduplicação e a reação a falha definitiva de origem estão descritas sem depender de conceitos internos do consumidor.
+- [x] A dependência de implementação no code-for-coders está explícita antes do piloto integrado.
+- [x] O gate estático passa com exit 0.

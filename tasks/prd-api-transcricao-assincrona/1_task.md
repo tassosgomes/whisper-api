@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: enabling
 blocked_by: []
 gate: "rtk npx --yes @stoplight/spectral-cli@6.15.0 lint tasks/prd-api-transcricao-assincrona/api-contract.yaml --ruleset .agents/skills/tsg-flow-contract-creator/rulesets/openapi.yaml --fail-severity=error"
@@ -43,6 +43,6 @@ Aplicar Q-01 a Q-11 já resolvidas na TechSpec, o baseline, a ADR-001 e a ADR-00
 
 ## Pronto quando
 
-- [ ] O OpenAPI e a documentação derivada descrevem as mesmas operações, códigos e políticas aprovadas.
-- [ ] O índice de contratos registra aprovação do acordo e as pendências de implementação externa sem reapresentar Q-01 a Q-11 como abertas.
-- [ ] O gate Spectral passa com exit 0.
+- [x] O OpenAPI e a documentação derivada descrevem as mesmas operações, códigos e políticas aprovadas.
+- [x] O índice de contratos registra aprovação do acordo e as pendências de implementação externa sem reapresentar Q-01 a Q-11 como abertas.
+- [x] O gate Spectral passa com exit 0.

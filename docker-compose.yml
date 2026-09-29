@@ -1,9 +1,54 @@
 services:
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --address ":9000" --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-whisper-local-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-minio-root-placeholder}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    entrypoint: ["/bin/sh", "/scripts/init_minio.sh"]
+    depends_on:
+      - minio
+    volumes:
+      - ./scripts/init_minio.sh:/scripts/init_minio.sh:ro
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-whisper-local-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-minio-root-placeholder}
+      S3_BUCKET: ${S3_BUCKET:-whisper-temporary}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-whisper-app}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-local-s3-placeholder-only}
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-whisper}
+      POSTGRES_USER: ${POSTGRES_USER:-whisper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-placeholder-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   transcriber:
     image: local-meeting-transcriber:dev
     build: .
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     volumes:
       - ./data/input:${APP_INPUT_DIR:-/data/input}:ro
       - ./data/output:${APP_OUTPUT_DIR:-/data/output}:rw
@@ -18,6 +63,19 @@ services:
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
       WHISPER_THREADS: ${WHISPER_THREADS:-${CPU_LIMIT:-8}}
       JOB_CONCURRENCY: ${JOB_CONCURRENCY:-1}
+      APP_ROLE: api
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:-whisper}
+      DATABASE_USER: ${POSTGRES_USER:-whisper}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-local-placeholder-only}
+      SOURCE_URL_ENCRYPTION_KEY: ${SOURCE_URL_ENCRYPTION_KEY:-}
+      WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-}
+      S3_BUCKET: ${S3_BUCKET:-whisper-temporary}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-whisper-app}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-local-s3-placeholder-only}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
@@ -34,6 +92,69 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5m
+
+  worker:
+    image: local-meeting-transcriber:dev
+    build: .
+    depends_on:
+      transcriber:
+        condition: service_healthy
+    volumes:
+      - ./models:/models:ro
+    environment:
+      APP_ROLE: worker
+      CPU_LIMIT: ${CPU_LIMIT:-8}
+      WHISPER_MODEL_NAME: ${WHISPER_MODEL_NAME:-medium}
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/models/${WHISPER_MODEL_NAME:-medium}}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_THREADS: ${WHISPER_THREADS:-${CPU_LIMIT:-8}}
+      JOB_CONCURRENCY: ${JOB_CONCURRENCY:-1}
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:-whisper}
+      DATABASE_USER: ${POSTGRES_USER:-whisper}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-local-placeholder-only}
+      SOURCE_URL_ENCRYPTION_KEY: ${SOURCE_URL_ENCRYPTION_KEY:-}
+      WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-}
+      S3_BUCKET: ${S3_BUCKET:-whisper-temporary}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-whisper-app}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-local-s3-placeholder-only}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    cpus: ${CPU_LIMIT:-8}
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+
+  postgres-test:
+    image: postgres:17-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: ${TEST_POSTGRES_DB:-whisper_test}
+      POSTGRES_USER: ${TEST_POSTGRES_USER:-whisper_test}
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:-local-test-only}
+    ports:
+      - "127.0.0.1:${TEST_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   model-prep:
     image: local-meeting-transcriber:dev
@@ -69,3 +190,8 @@ services:
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     cpus: ${CPU_LIMIT:-8}
     init: true
+
+volumes:
+  postgres_data:
+  postgres_test_data:
+  minio_data:

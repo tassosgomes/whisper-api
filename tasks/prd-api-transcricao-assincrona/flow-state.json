@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "branch": "feature/api-transcricao-assincrona",
+  "original_base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
+  "base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
+"target_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
+  "last_checkpoint": "91ce2f010c742f7aa3ed806eb9c6de2f8e4458de",
+  "phase": "full_validation",
+  "active_task": null,
+  "attempt": 1,
+  "full_attempt": 1,
+  "intervention_round": 1,
+  "intervention_note": "dono autorizou nova rodada para task 7.0 escalando validator para kind=codex model=gpt-6-sol effort=high (2026-09-28)",
+  "transport_retries": 3,
+  "routing_override": "dono impôs validator=codex em 2026-09-28 (claude sem cota); --kind=codex por chamada",
+  "specs": ["techspec.md"],
+  "delivery": "pr",
+  "worktree": "/home/tsgomes/github-tassosgomes/whisper-api-transcricao-flow",
+  "plan_approved": "2026-09-28 pelo dono; atualizar tasks.md no primeiro checkpoint",
+  "validated_commit": "91ce2f010c742f7aa3ed806eb9c6de2f8e4458de",
+  "validated_tree": "9911a34a43a303df8fbab5aa83b5df46d2935b2d",
+  "last_result": {
+    "run_id": "run.mXNHTcCc",
+    "role": "validator",
+    "mode": "full",
+    "outcome": "approved",
+    "gate": "passed",
+    "note": "47 testes, matriz completa, 5 mutantes detectados; 3 recomendações não bloqueantes"
+  },
+  "pending_delegation": {
+    "role": "integrator",
+    "mode": "complete-prd",
+    "delivery": "pr",
+    "target_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5"
+  },
+  "history": [
+    {
+      "event": "flow_start",
+      "detail": "worktree nova whisper-api-transcricao-flow; branch reutilizada; plano aprovado pelo dono; delivery=pr"
+    },
+    {
+      "event": "task_1.0_implement_complete",
+      "detail": "run.leNLNSEv gate spectral exit 0, 0 erros; diff em api-contract.yaml/md + contracts.md"
+    },
+    {
+      "event": "transport_failure_validator",
+      "detail": "run.5mHBASQl claude agent_not_ready (diálogo de confiança da worktree nova; aceito); dono informou claude sem cota e impôs codex para validator"
+    }
+  ]
+}

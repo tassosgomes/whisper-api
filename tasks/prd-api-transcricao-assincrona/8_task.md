@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [2.0, 6.0, 7.0]
 gate: "rtk pytest -q -k v05_webhook"

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.monitoring.metrics import ResourceSampler
 from app.transcription.markdown import write_markdown_atomic
+from app.transcription.models import Segment
 from app.transcription.paths import resolve_input_path
 from app.transcription.whisper import Transcriber
 
@@ -27,8 +28,12 @@ def _write_json_atomic(destination: Path, payload: dict) -> None:
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=destination.parent,
-            prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
         ) as handle:
             temporary = handle.name
             json.dump(payload, handle, ensure_ascii=False, indent=2)
@@ -48,12 +53,45 @@ def _artifact_stem(source: Path, job_id: str) -> str:
     return f"{safe_name or 'media'}.{safe_id}"
 
 
-def _metrics_payload(
-    *, source: Path, transcriber: Transcriber, duration_seconds: float | None,
-    elapsed_seconds: float, sampler: ResourceSampler, status: str,
+def public_result_payload(
+    job_id: str, segments: list[Segment], duration_seconds: float
 ) -> dict:
-    rtf = elapsed_seconds / duration_seconds if duration_seconds and duration_seconds > 0 else None
-    speed = duration_seconds / elapsed_seconds if duration_seconds and elapsed_seconds > 0 else None
+    """Convert engine values to the stable, versioned public result shape."""
+    return {
+        "schemaVersion": 1,
+        "jobId": job_id,
+        "language": "pt-BR",
+        "durationMs": int(round(duration_seconds * 1000)),
+        "segments": [
+            {
+                "startMs": max(0, int(round(float(segment.start) * 1000))),
+                "endMs": max(0, int(round(float(segment.end) * 1000))),
+                "text": str(segment.text),
+            }
+            for segment in segments
+        ],
+    }
+
+
+def _metrics_payload(
+    *,
+    source: Path,
+    transcriber: Transcriber,
+    duration_seconds: float | None,
+    elapsed_seconds: float,
+    sampler: ResourceSampler,
+    status: str,
+) -> dict:
+    rtf = (
+        elapsed_seconds / duration_seconds
+        if duration_seconds and duration_seconds > 0
+        else None
+    )
+    speed = (
+        duration_seconds / elapsed_seconds
+        if duration_seconds and elapsed_seconds > 0
+        else None
+    )
     threads = transcriber.cpu_threads
     return {
         "input": {
@@ -90,7 +128,9 @@ def _metrics_payload(
     }
 
 
-def run_transcription(relative_path: str, job_id: str, transcriber: Transcriber) -> dict:
+def run_transcription(
+    relative_path: str, job_id: str, transcriber: Transcriber
+) -> dict:
     """Transcribe one validated media file and return API result fields.
 
     The CLI and API call this same function. Files are named using the job ID
@@ -114,15 +154,21 @@ def run_transcription(relative_path: str, job_id: str, transcriber: Transcriber)
         elapsed = sampler.stop()
         sampling = False
         write_markdown_atomic(
-            markdown_path, source.name, segments,
+            markdown_path,
+            source.name,
+            segments,
             duration_seconds=duration,
             model_name=transcriber.model_name,
             cpu_threads=transcriber.cpu_threads,
             elapsed_seconds=elapsed,
         )
         metrics = _metrics_payload(
-            source=source, transcriber=transcriber, duration_seconds=duration,
-            elapsed_seconds=elapsed, sampler=sampler, status="completed",
+            source=source,
+            transcriber=transcriber,
+            duration_seconds=duration,
+            elapsed_seconds=elapsed,
+            sampler=sampler,
+            status="completed",
         )
         _write_json_atomic(metrics_path, metrics)
     except Exception:
@@ -130,8 +176,12 @@ def run_transcription(relative_path: str, job_id: str, transcriber: Transcriber)
             elapsed = sampler.stop()
         try:
             failure_metrics = _metrics_payload(
-                source=source, transcriber=transcriber, duration_seconds=duration,
-                elapsed_seconds=elapsed, sampler=sampler, status="failed",
+                source=source,
+                transcriber=transcriber,
+                duration_seconds=duration,
+                elapsed_seconds=elapsed,
+                sampler=sampler,
+                status="failed",
             )
             _write_json_atomic(metrics_path, failure_metrics)
         except Exception:

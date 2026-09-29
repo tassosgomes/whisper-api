@@ -3,7 +3,7 @@
 > **TechSpec de origem:** [techspec.md](techspec.md), aprovada em 2026-09-28  
 > **Escopo:** Backend  
 > **ADRs pertinentes:** [ADR-001](../../docs/adr/adr-001.md), [ADR-002](../../docs/adr/adr-002.md)  
-> **Status do plano:** Em revisão
+> **Status do plano:** Aprovado em 2026-09-28
 
 ## Visão Geral
 
@@ -43,14 +43,14 @@ V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso a
 
 ## Tasks
 
-- [ ] 1.0 Atualizar e aprovar o contrato HTTP público
-- [ ] 2.0 Registrar o procedimento operacional do piloto
-- [ ] 3.0 Publicar o acordo de integração do primeiro consumidor
-- [ ] 4.0 Autenticar e isolar chamadas por conta e credencial
-- [ ] 5.0 Aceitar jobs idempotentes após iniciar aquisição
-- [ ] 6.0 Baixar, validar e transcrever mídia com estado recuperável
-- [ ] 7.0 Servir resultado versionado e expurgar dados vencidos
-- [ ] 8.0 Entregar webhook terminal assinado e comprovar a jornada
+- [x] 1.0 Atualizar e aprovar o contrato HTTP público
+- [x] 2.0 Registrar o procedimento operacional do piloto
+- [x] 3.0 Publicar o acordo de integração do primeiro consumidor
+- [x] 4.0 Autenticar e isolar chamadas por conta e credencial
+- [x] 5.0 Aceitar jobs idempotentes após iniciar aquisição
+- [x] 6.0 Baixar, validar e transcrever mídia com estado recuperável
+- [x] 7.0 Servir resultado versionado e expurgar dados vencidos
+- [x] 8.0 Entregar webhook terminal assinado e comprovar a jornada
 
 ## Verificação herdada
 

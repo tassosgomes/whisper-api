@@ -6,10 +6,29 @@ info:
     Contrato do recorte HTTP do PRD de API assíncrona de transcrição.
 
     Fonte principal: tasks/prd-api-transcricao-assincrona/prd.md v1.0,
-    aprovado em 2026-09-28. O contrato está Em Revisão enquanto as decisões
-    listadas em contracts.md não forem fechadas. Seu escopo é a interface HTTP
-    deste PRD, inclusive o webhook enviado pelo Whisper ao destino cadastrado
-    para a conta.
+    aprovado em 2026-09-28. Acordo aprovado na TechSpec de 2026-09-28
+    (Q-01 a Q-11), baseline aprovado e ADR-001/ADR-002 aceitas. Seu escopo
+    é a interface HTTP deste PRD, inclusive o webhook enviado pelo Whisper
+    ao destino cadastrado para a conta.
+
+    Autenticação por X-API-Key; permissões iniciais iguais para todas as
+    chaves com leitura restrita aos jobs da credencial criadora; rotação
+    preserva credential_id. Idempotência de 120 s por conta e credencial.
+    Limite de 5 GiB; formatos .mp4, .mkv, .webm, .mp3, .wav, .m4a com
+    validação real de formato/codec. Antes de aceitar o job, o serviço conecta
+    à origem e inspeciona o tamanho disponível: se informação conhecida nesse
+    início (por exemplo, Content-Length) exceder 5 GiB, responde 413 sem criar
+    job. Se o tamanho for desconhecido, a criação prossegue sem rejeição por
+    tamanho; o limite é aplicado durante o streaming e, se excedido, o job
+    termina em failed/MEDIA_SIZE_LIMIT_EXCEEDED.
+    URL de leitura GET pré-assinada com
+    validade efetiva mínima de 60 min, timeouts de 10 s (conexão) e 60 s
+    (inatividade de leitura) e até 3 tentativas totais para falhas
+    transitórias. Webhook no padrão Standard Webhooks v1 com retries por
+    até 72 h. Resultado schemaVersion 1, retenção de até 24 h após o estado
+    terminal. SLOs iniciais: p95 de até 30 s até a primeira conexão com a
+    origem e p95 de até 24 h até o estado terminal, para até 10 jobs/dia de
+    até 2 h e 5 GiB, a reavaliar com métricas de produção assistida.
 
     O prefixo /v1 preserva a rota conhecida da PoC. Não há contrato anterior
     nem evidência consultada de implantação em produção; compatibilidade com
@@ -39,10 +58,33 @@ paths:
         nem deve aparecer em logs ou traces. No primeiro corte, o idioma do
         resultado é pt-BR e a duração máxima da mídia é 2 horas.
 
-        Repetir a mesma requisição com a mesma chave retorna o mesmo job, no
-        estado atual, sem iniciar outro processamento. Reutilizar a chave para
-        outro corpo retorna 409 IDEMPOTENCY_KEY_REUSED. O prazo de retenção da
-        chave e a regra de equivalência do corpo permanecem em revisão.
+        Idempotência escopada por conta, credential_id e Idempotency-Key, retida
+        por 120 segundos a partir do primeiro aceite. Dentro da janela, o mesmo
+        JSON semântico retorna o mesmo job (ordem/whitespace de propriedades
+        podem variar; valores, incluindo sourceUrl, devem ser iguais). Reuso com
+        corpo diferente retorna 409 IDEMPOTENCY_KEY_REUSED. Após 120 segundos a
+        chave pode iniciar um novo job.
+
+        A mídia é limitada a 5 GiB e aos formatos .mp4, .mkv, .webm, .mp3, .wav
+        e .m4a, com validação real de formato/codec. Antes do aceite, o serviço
+        conecta à origem e inspeciona o tamanho disponível. Se informação
+        conhecida nesse início (por exemplo, Content-Length) exceder 5 GiB,
+        responde 413 MEDIA_SIZE_LIMIT_EXCEEDED e não cria job. Se o tamanho for
+        desconhecido (por exemplo, transferência chunked), a criação prossegue
+        sem rejeição por tamanho e o limite é aplicado durante o streaming. Se
+        o streaming exceder 5 GiB, o job aceito termina em
+        failed/MEDIA_SIZE_LIMIT_EXCEEDED. A URL de leitura GET pré-assinada é gerada
+        pelo consumidor (code-for-coders) para seu objeto privado e enviada como
+        sourceUrl, com validade efetiva mínima de 60 min desde a emissão. O
+        download usa timeout de conexão de 10 s, timeout de inatividade de
+        leitura de 60 s e até 3 tentativas totais (inicial + 2 retentativas com
+        full jitter de 0–5 s e 0–30 s) somente para falhas transitórias de rede,
+        timeout e HTTP 408/429/5xx, respeitando Retry-After quando ainda couber
+        antes do vencimento da URL. Falhas permanentes não são repetidas e
+        nenhuma tentativa começa após a expiração; a URL não é renovada
+        automaticamente. Esgotadas as tentativas, o job termina em
+        failed/SOURCE_UNAVAILABLE; novo processamento exige outra URL e nova
+        Idempotency-Key.
       operationId: createTranscription
       tags:
         - Transcriptions
@@ -52,7 +94,11 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: Chave estável para repetição segura da mesma solicitação.
+          description: >-
+            Chave estável para repetição segura da mesma solicitação.
+            Escopada por conta e credential_id; retida por 120 segundos a
+            partir do primeiro aceite. Mesmo JSON semântico retorna o mesmo
+            job; corpo diferente retorna 409 IDEMPOTENCY_KEY_REUSED.
           schema:
             type: string
             minLength: 1
@@ -138,6 +184,22 @@ paths:
                     status: 422
                     code: INVALID_SOURCE_URL
                     instance: /v1/transcriptions
+        '413':
+          description: >-
+            O tamanho disponível ao inspecionar a origem antes do aceite excede
+            5 GiB; nenhum job é criado.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                mediaSizeLimit:
+                  value:
+                    type: about:blank
+                    title: Mídia acima do limite
+                    status: 413
+                    code: MEDIA_SIZE_LIMIT_EXCEEDED
+                    instance: /v1/transcriptions
         '500':
           $ref: '#/components/responses/InternalServerError'
 
@@ -148,9 +210,9 @@ paths:
       summary: Consultar estado do job
       description: |
         Retorna o estado público atual e os horários disponíveis. Jobs de outra
-        conta e jobs expirados respondem 404 NOT_FOUND sem revelar estado ou
-        conteúdo. Um job terminal permanece consultável por até 24 horas a
-        partir de terminalAt.
+        conta, de outra credencial ou expirados respondem 404 NOT_FOUND sem
+        revelar estado ou conteúdo. Um job terminal permanece consultável por
+        até 24 horas a partir de terminalAt.
       operationId: getTranscription
       tags:
         - Transcriptions
@@ -258,13 +320,56 @@ webhooks:
         retentativas e permite deduplicação. O corpo não inclui mídia nem
         transcrição. O cliente confirma o recebimento com uma resposta HTTP 2xx.
 
-        O webhook usa material de verificação independente da API Key. Cabeçalho,
-        algoritmo, representação assinada e janela contra replay ainda estão em
-        revisão e devem ser definidos antes da implementação.
+        O webhook usa material de verificação independente da API Key, no padrão
+        Standard Webhooks v1: webhook-id contém o eventId estável (igual em
+        todas as tentativas); webhook-timestamp contém o horário Unix em
+        segundos da tentativa atual (muda a cada retry); webhook-signature usa
+        v1,<base64(HMAC-SHA256(secret, webhook-id + "." + webhook-timestamp +
+        "." + raw_body))> sobre os bytes exatos enviados. O consumidor verifica
+        em tempo constante, aceita timestamp com desvio máximo de ±300 s e
+        deduplica pelo webhook-id durante a janela de retry de 72 h. Falhas
+        transitórias são repetidas por até 72 h com backoff exponencial e
+        jitter; 2xx confirma entrega, 3xx é falha sem redirecionamento, 410
+        desativa o destino e 429 reduz o ritmo (considerar Retry-After). Em
+        rotação planejada, assinar com segredo atual e novo por 72 h; em
+        comprometimento, revogar imediatamente o antigo. O destino exige HTTPS
+        com proteção SSRF.
       operationId: receiveTranscriptionTerminalWebhook
       tags:
         - Transcriptions
       security: []
+      parameters:
+        - name: webhook-id
+          in: header
+          required: true
+          description: eventId estável do evento; igual em todas as tentativas.
+          schema:
+            type: string
+            minLength: 1
+            examples:
+              - evt_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        - name: webhook-timestamp
+          in: header
+          required: true
+          description: Horário Unix em segundos da tentativa atual; tolerância de ±300 s.
+          schema:
+            type: string
+            minLength: 1
+            examples:
+              - '1759074600'
+        - name: webhook-signature
+          in: header
+          required: true
+          description: >-
+            v1,<base64(HMAC-SHA256(secret, webhook-id + "." +
+            webhook-timestamp + "." + raw_body))>; em rotação planejada pode
+            conter duas assinaturas v1 por 72 h, separadas por espaço conforme
+            Standard Webhooks v1.
+          schema:
+            type: string
+            minLength: 1
+            examples:
+              - v1,placeholder-signature-nao-real
       requestBody:
         required: true
         content:
@@ -291,9 +396,14 @@ components:
       in: header
       name: X-API-Key
       description: |
-        Uso de API Key vinculada a uma conta, conforme o PRD. O cabeçalho
-        X-API-Key é uma proposta pendente de confirmação; ver contracts.md.
-        Chaves são provisionadas e revogadas pelo operador fora desta API.
+        API Key vinculada a uma conta (Q-07 aprovado). Todas as chaves têm as
+        mesmas permissões iniciais: criar jobs e ler estado/resultado somente
+        dos jobs criados pela própria credencial; job de outra conta, outra
+        chave ou expirado responde 404 NOT_FOUND neutro. 403 permanece reservado
+        para permissões futuras diferenciadas, fora do primeiro corte. Na
+        rotação, o novo segredo mantém o credential_id e o acesso aos jobs
+        existentes; a chave antiga deixa de autorizar. Chaves são provisionadas
+        e revogadas pelo operador fora desta API.
 
   parameters:
     JobId:
@@ -335,7 +445,7 @@ components:
                 status: 403
                 code: FORBIDDEN
     NotFound:
-      description: Job inexistente, expirado ou pertencente a outra conta.
+      description: Job inexistente, expirado ou pertencente a outra conta ou credencial.
       content:
         application/problem+json:
           schema:
@@ -372,7 +482,10 @@ components:
           type: string
           format: uri
           pattern: '^https://'
-          description: URL assinada HTTPS de download. A URL não deve ser registrada em logs.
+          description: >-
+            URL HTTPS GET pré-assinada de leitura gerada pelo consumidor para
+            seu objeto privado. Validade efetiva mínima de 60 min desde a
+            emissão. A URL não deve ser registrada em logs.
           examples:
             - https://media.example.test/signed/arquivo.mp4?sig=not-a-real-signature
         clientReference:
@@ -481,10 +594,14 @@ components:
           type: string
           enum:
             - SOURCE_UNAVAILABLE
+            - MEDIA_SIZE_LIMIT_EXCEEDED
             - MEDIA_DURATION_LIMIT_EXCEEDED
             - UNSUPPORTED_MEDIA_FORMAT
             - TRANSCRIPTION_FAILED
-          description: Código estável para tratamento pelo consumidor.
+          description: >-
+            Código estável para tratamento pelo consumidor. Se o limite de
+            5 GiB só for detectado durante o streaming da aquisição, o job
+            aceito termina com failed e MEDIA_SIZE_LIMIT_EXCEEDED.
           examples:
             - SOURCE_UNAVAILABLE
         message:
