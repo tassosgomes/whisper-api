@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -18,14 +19,19 @@ from app.jobs.security import SourceURLCipher
 from app.monitoring.metrics import DownloadStartMetrics
 from app.transcription.paths import InvalidSourceURL
 from app.transcription.source import (
+    ExpiredSourceURL,
     MediaSizeExceeded,
     SourceConnector,
     SourceUnavailable,
+    TransientSourceFailure,
 )
 
 
 IDEMPOTENCY_WINDOW = timedelta(seconds=120)
 DOWNLOAD_CONNECT_CONCURRENCY = 2
+# Q-04 first retry window: the admission GET counts as attempt 1 of 3, so the
+# scheduled wait before worker attempt 2 uses full jitter 0-5 s.
+ADMISSION_RETRY_JITTER_SECONDS = 5.0
 
 
 class IdempotencyKeyReused(ValueError):
@@ -41,11 +47,14 @@ class JobManager:
         source_url_cipher: SourceURLCipher,
         source_connector: SourceConnector,
         download_metrics: DownloadStartMetrics,
+        *,
+        jitter=random.uniform,
     ) -> None:
         self._sessions = sessionmaker(bind=engine, expire_on_commit=False)
         self._source_url_cipher = source_url_cipher
         self._source_connector = source_connector
         self._download_metrics = download_metrics
+        self._jitter = jitter
         self._download_executor = ThreadPoolExecutor(
             max_workers=DOWNLOAD_CONNECT_CONCURRENCY,
             thread_name_prefix="source-connect",
@@ -172,20 +181,47 @@ class JobManager:
                 self._download_executor.submit(
                     self._source_connector.start, source_url
                 ).result()
-            except (InvalidSourceURL, MediaSizeExceeded) as exc:
+            except (ExpiredSourceURL, InvalidSourceURL, MediaSizeExceeded) as exc:
                 session.delete(record)
                 session.delete(job)
                 session.flush()
                 deferred_error = exc
-            except SourceUnavailable as exc:
-                # Keep the durable reservation. A retry or process recovery can
-                # restart the connection attempt without losing the source URL.
-                deferred_error = exc
-            else:
+            except TransientSourceFailure as exc:
+                # Q-04: a transient origin failure at admission does not reject
+                # the job. This attempt counts as the first of the three
+                # permitted origin attempts; the downloader owns the retries
+                # with jitter and fails terminally when they are exhausted.
+                # Preserve Retry-After and schedule the earliest instant for
+                # worker attempt 2 with full jitter 0-5 s, so the retry does
+                # not start immediately.
                 accepted_at = _utc_now()
+                retry_after = exc.retry_after_seconds or 0.0
+                jitter = self._jitter(0.0, ADMISSION_RETRY_JITTER_SECONDS)
+                delay = max(retry_after, jitter)
+                job.download_attempts += 1
                 job.accepted_at = accepted_at
                 job.source_connection_started_at = accepted_at
                 job.updated_at = accepted_at
+                job.download_not_before = accepted_at + timedelta(seconds=delay)
+                record.expires_at = accepted_at + IDEMPOTENCY_WINDOW
+                public_job = _public_job(job)
+            except SourceUnavailable as exc:
+                # Permanent origin condition known at admission: reject with
+                # the contractual error instead of keeping a reservation the
+                # worker would repeat outside the retry policy.
+                session.delete(record)
+                session.delete(job)
+                session.flush()
+                deferred_error = exc
+            else:
+                accepted_at = _utc_now()
+                # The successful admission GET is the first of the three
+                # permitted origin attempts; the worker owns only retries.
+                job.download_attempts += 1
+                job.accepted_at = accepted_at
+                job.source_connection_started_at = accepted_at
+                job.updated_at = accepted_at
+                job.download_not_before = None
                 record.expires_at = accepted_at + IDEMPOTENCY_WINDOW
                 public_job = _public_job(job)
 
@@ -211,7 +247,11 @@ class JobManager:
         """Return a durable URL to the owning worker without exposing it over HTTP."""
         with self._sessions() as session:
             job = session.get(TranscriptionJob, job_id)
-            if job is None or job.status != "downloading":
+            if (
+                job is None
+                or job.status != "downloading"
+                or job.source_url_encrypted is None
+            ):
                 return None
             return self._source_url_cipher.decrypt(job.id, job.source_url_encrypted)
 
@@ -242,4 +282,21 @@ def _public_job(job: TranscriptionJob) -> dict:
     }
     if job.client_reference is not None:
         result["clientReference"] = job.client_reference
+    if job.terminal_at is not None:
+        result["terminalAt"] = _isoformat(job.terminal_at)
+    if job.failure_code is not None:
+        result["failure"] = {
+            "code": job.failure_code,
+            "message": _failure_message(job.failure_code),
+        }
     return result
+
+
+def _failure_message(code: str) -> str:
+    return {
+        "SOURCE_UNAVAILABLE": "Não foi possível obter a mídia na origem.",
+        "MEDIA_SIZE_LIMIT_EXCEEDED": "A mídia excede o limite permitido de 5 GiB.",
+        "MEDIA_DURATION_LIMIT_EXCEEDED": "A mídia excede a duração máxima de 2 horas.",
+        "UNSUPPORTED_MEDIA_FORMAT": "O formato ou codec da mídia não é compatível.",
+        "TRANSCRIPTION_FAILED": "Não foi possível transcrever a mídia.",
+    }.get(code, "O processamento da mídia falhou.")

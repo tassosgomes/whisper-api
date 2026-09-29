@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.monitoring.metrics import ResourceSampler
 from app.transcription.markdown import write_markdown_atomic
+from app.transcription.models import Segment
 from app.transcription.paths import resolve_input_path
 from app.transcription.whisper import Transcriber
 
@@ -50,6 +51,26 @@ def _artifact_stem(source: Path, job_id: str) -> str:
     if not safe_id:
         raise ValueError("Identificador de job inválido")
     return f"{safe_name or 'media'}.{safe_id}"
+
+
+def public_result_payload(
+    job_id: str, segments: list[Segment], duration_seconds: float
+) -> dict:
+    """Convert engine values to the stable, versioned public result shape."""
+    return {
+        "schemaVersion": 1,
+        "jobId": job_id,
+        "language": "pt-BR",
+        "durationMs": int(round(duration_seconds * 1000)),
+        "segments": [
+            {
+                "startMs": max(0, int(round(float(segment.start) * 1000))),
+                "endMs": max(0, int(round(float(segment.end) * 1000))),
+                "text": str(segment.text),
+            }
+            for segment in segments
+        ],
+    }
 
 
 def _metrics_payload(

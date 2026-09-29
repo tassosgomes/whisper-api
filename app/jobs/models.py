@@ -40,8 +40,22 @@ class TranscriptionJob(Base):
         nullable=False,
     )
     status: Mapped[str] = mapped_column(String(24), nullable=False)
-    source_url_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    source_url_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     client_reference: Mapped[str | None] = mapped_column(Text)
+    media_object_key: Mapped[str | None] = mapped_column(String(512))
+    result_object_key: Mapped[str | None] = mapped_column(String(512))
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    download_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    download_not_before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

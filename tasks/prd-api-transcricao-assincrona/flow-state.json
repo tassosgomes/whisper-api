@@ -4,13 +4,13 @@
   "original_base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
   "base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
   "target_ref": null,
-  "last_checkpoint": "d5539325ba59205b4ae30d7a8ea6874ee8f8158e",
+  "last_checkpoint": "b8718697f43fe3881c72369ce7c39066e62802bf",
   "phase": "checkpoint",
-  "active_task": "5.0",
-  "attempt": 1,
+  "active_task": "6.0",
+  "attempt": 3,
   "max_attempts": 3,
   "full_attempt": 0,
-  "transport_retries": 1,
+  "transport_retries": 2,
   "routing_override": "dono impôs validator=codex em 2026-09-28 (claude sem cota); --kind=codex por chamada",
   "specs": ["techspec.md"],
   "delivery": "pr",
@@ -19,19 +19,19 @@
   "validated_commit": null,
   "validated_tree": null,
   "last_result": {
-    "run_id": "run.QnP5kFpL",
-    "role": "implementer",
-    "mode": "implement",
-    "task": "5.0",
-    "attempt": "1/3",
-    "outcome": "implementation_complete",
-    "gate": "passed"
+    "run_id": "run.d1i6SkjL",
+    "role": "validator",
+    "mode": "revalidation",
+    "task": "6.0",
+    "attempt": "3/3",
+    "outcome": "approved",
+    "note": "aprovada na tentativa 3/3; transporte anterior run.Ks8MqKtO sem efeitos"
   },
   "pending_delegation": {
-    "role": "validator",
-    "mode": "focused",
-    "task": "5.0",
-    "attempt": "1/3"
+    "role": "integrator",
+    "mode": "checkpoint-task",
+    "task": "6.0",
+    "attempt": "3/3"
   },
   "history": [
     {

@@ -10,7 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.access.credentials import AuthenticatedCredential
 from app.jobs.executor import IdempotencyKeyReused
 from app.transcription.paths import InvalidSourceURL, validate_source_url_syntax
-from app.transcription.source import MediaSizeExceeded, SourceUnavailable
+from app.transcription.source import (
+    ExpiredSourceURL,
+    MediaSizeExceeded,
+    SourceUnavailable,
+    TransientSourceFailure,
+)
 
 
 router = APIRouter()
@@ -69,13 +74,13 @@ def create_transcription(
                 "detail": "A chave já foi usada com outra solicitação.",
             },
         ) from None
-    except InvalidSourceURL:
+    except (InvalidSourceURL, ExpiredSourceURL):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "title": "URL de origem inválida",
                 "code": "INVALID_SOURCE_URL",
-                "detail": "Informe uma URL HTTPS de origem válida.",
+                "detail": "Informe uma URL HTTPS de origem válida e não expirada.",
             },
         ) from None
     except MediaSizeExceeded:
@@ -87,13 +92,22 @@ def create_transcription(
                 "detail": "A mídia excede o limite permitido de 5 GiB.",
             },
         ) from None
-    except SourceUnavailable:
+    except TransientSourceFailure:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
                 "title": "Erro interno",
                 "code": "INTERNAL_ERROR",
                 "detail": "Não foi possível iniciar a conexão com a origem.",
+            },
+        ) from None
+    except SourceUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "URL de origem inválida",
+                "code": "INVALID_SOURCE_URL",
+                "detail": "A origem rejeitou a URL de forma permanente.",
             },
         ) from None
 
@@ -131,8 +145,10 @@ def get_transcription(
 def health(request: Request) -> dict:
     settings = request.app.state.settings
     loaded = bool(getattr(request.app.state, "model_loaded", False))
+    ready = settings.ROLE == "api" or loaded
     return {
-        "status": "ok" if loaded else "starting",
+        "status": "ok" if ready else "starting",
+        "role": settings.ROLE,
         "model": settings.WHISPER_MODEL_NAME,
         "device": settings.WHISPER_DEVICE,
         "computeType": settings.WHISPER_COMPUTE_TYPE,

@@ -16,9 +16,11 @@ from app.api.transcriptions import router
 from app.database import create_database_engine, database_url_from_env, upgrade_database
 from app.jobs.executor import JobManager
 from app.jobs.security import SourceURLCipher
-from app.monitoring.metrics import DownloadStartMetrics
-from app.transcription.whisper import Transcriber
+from app.jobs.worker import JobWorker
+from app.monitoring.metrics import DownloadStartMetrics, JobProcessingMetrics
+from app.storage.s3 import S3ObjectStore
 from app.transcription.source import SourceConnector
+from app.transcription.whisper import Transcriber
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,12 @@ class Settings:
     JOB_CONCURRENCY: int
     DATABASE_URL: str
     SOURCE_URL_ENCRYPTION_KEY: str
+    ROLE: str
+    S3_BUCKET: str
+    S3_REGION: str
+    S3_ENDPOINT_URL: str | None
+    S3_ACCESS_KEY_ID: str | None
+    S3_SECRET_ACCESS_KEY: str | None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,6 +53,12 @@ class Settings:
             JOB_CONCURRENCY=int(os.getenv("JOB_CONCURRENCY", "1")),
             DATABASE_URL=database_url_from_env(),
             SOURCE_URL_ENCRYPTION_KEY=os.getenv("SOURCE_URL_ENCRYPTION_KEY", ""),
+            ROLE=os.getenv("APP_ROLE", "api").casefold(),
+            S3_BUCKET=os.getenv("S3_BUCKET", "whisper-temporary"),
+            S3_REGION=os.getenv("S3_REGION", "us-east-1"),
+            S3_ENDPOINT_URL=os.getenv("S3_ENDPOINT_URL") or None,
+            S3_ACCESS_KEY_ID=os.getenv("S3_ACCESS_KEY_ID") or None,
+            S3_SECRET_ACCESS_KEY=os.getenv("S3_SECRET_ACCESS_KEY") or None,
         )
         if settings.WHISPER_DEVICE != "cpu" or settings.WHISPER_COMPUTE_TYPE != "int8":
             raise ValueError(
@@ -54,6 +68,8 @@ class Settings:
             raise ValueError(
                 "WHISPER_THREADS deve ser positivo e JOB_CONCURRENCY deve ser 1"
             )
+        if settings.ROLE not in {"api", "worker", "all"}:
+            raise ValueError("APP_ROLE deve ser api, worker ou all.")
         return settings
 
 
@@ -69,23 +85,46 @@ async def lifespan(application: FastAPI):
         source_url_cipher = SourceURLCipher.from_hex(settings.SOURCE_URL_ENCRYPTION_KEY)
         application.state.source_url_cipher = source_url_cipher
         application.state.download_metrics = DownloadStartMetrics()
+        application.state.job_metrics = JobProcessingMetrics()
         application.state.model_loaded = False
         application.state.jobs = None
-        application.state.transcriber = Transcriber(
-            model_path=settings.WHISPER_MODEL_PATH,
-            model_name=settings.WHISPER_MODEL_NAME,
-            cpu_threads=settings.WHISPER_THREADS,
+        application.state.source_connector = SourceConnector()
+        application.state.object_store = S3ObjectStore(
+            bucket=settings.S3_BUCKET,
+            region=settings.S3_REGION,
+            endpoint_url=settings.S3_ENDPOINT_URL,
+            access_key_id=settings.S3_ACCESS_KEY_ID,
+            secret_access_key=settings.S3_SECRET_ACCESS_KEY,
         )
         application.state.jobs = JobManager(
             database_engine,
             source_url_cipher,
-            SourceConnector(),
+            application.state.source_connector,
             application.state.download_metrics,
         )
-        application.state.model_loaded = True
+        application.state.worker = None
+        if settings.ROLE in {"worker", "all"}:
+            application.state.transcriber = Transcriber(
+                model_path=settings.WHISPER_MODEL_PATH,
+                model_name=settings.WHISPER_MODEL_NAME,
+                cpu_threads=settings.WHISPER_THREADS,
+            )
+            application.state.worker = JobWorker(
+                database_engine,
+                source_url_cipher,
+                application.state.source_connector,
+                application.state.object_store,
+                application.state.transcriber,
+                application.state.job_metrics,
+            )
+            application.state.worker.start()
+            application.state.model_loaded = True
         yield
     finally:
         application.state.model_loaded = False
+        worker = getattr(application.state, "worker", None)
+        if worker is not None:
+            worker.shutdown()
         jobs = getattr(application.state, "jobs", None)
         if jobs is not None:
             jobs.shutdown()
@@ -186,3 +225,12 @@ async def request_validation_to_problem(
 
 
 app.include_router(router)
+
+
+@app.get("/metrics")
+def metrics(request: Request) -> dict:
+    """Expose low-cardinality job timing, failure, and resource aggregates."""
+    return {
+        "downloadStart": request.app.state.download_metrics.snapshot(),
+        "jobs": request.app.state.job_metrics.snapshot(),
+    }

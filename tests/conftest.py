@@ -7,13 +7,17 @@ import socket
 import ssl
 import subprocess
 import threading
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Iterator
 
 import pytest
+import boto3
+from botocore.config import Config
 from fastapi.testclient import TestClient
+from moto.server import ThreadedMotoServer
 from sqlalchemy import delete
 from sqlalchemy.engine import URL, make_url
 
@@ -25,6 +29,28 @@ from app.main import app
 TEST_SOURCE_URL_ENCRYPTION_KEY = "1a" * 32
 TEST_SOURCE_HOST = "media.example.test"
 TEST_SOURCE_IP = "93.184.216.34"
+TEST_S3_BUCKET = "whisper-test"
+
+
+@pytest.fixture(scope="session")
+def controlled_s3_endpoint() -> Iterator[str]:
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    endpoint = f"http://{host}:{port}"
+    setup_client = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=endpoint,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        config=Config(s3={"addressing_style": "path"}),
+    )
+    setup_client.create_bucket(Bucket=TEST_S3_BUCKET)
+    try:
+        yield endpoint
+    finally:
+        server.stop()
 
 
 class FakeTranscriber:
@@ -102,9 +128,15 @@ class ControlledOrigin:
     request_count: int = 0
     content_length_override: int | None = None
     status_code: int = 200
+    status_codes: list[int] | None = None
+    retry_after_values: list[str | None] | None = None
     redirect_location: str | None = None
     body: bytes = b"controlled test media"
+    omit_content_length: bool = False
+    response_delay_seconds: float = 0.0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    active_requests: int = 0
+    max_concurrent_requests: int = 0
 
     @property
     def source_url(self) -> str:
@@ -112,6 +144,11 @@ class ControlledOrigin:
             f"https://{TEST_SOURCE_HOST}:{self.port}/audio.mp3"
             "?signature=controlled-test-secret"
         )
+
+    def url_for(
+        self, path: str, query: str = "signature=controlled-test-secret"
+    ) -> str:
+        return f"https://{TEST_SOURCE_HOST}:{self.port}{path}?{query}"
 
     def count_requests(self) -> int:
         with self.lock:
@@ -129,24 +166,48 @@ def controlled_https_origin(
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             with state.lock:
+                request_index = state.request_count
                 state.request_count += 1
-                status_code = state.status_code
+                state.active_requests += 1
+                state.max_concurrent_requests = max(
+                    state.max_concurrent_requests, state.active_requests
+                )
+                status_code = (
+                    state.status_codes[request_index]
+                    if state.status_codes and request_index < len(state.status_codes)
+                    else state.status_code
+                )
                 body = state.body
                 content_length = state.content_length_override
+                omit_content_length = state.omit_content_length
+                retry_after = (
+                    state.retry_after_values[request_index]
+                    if state.retry_after_values
+                    and request_index < len(state.retry_after_values)
+                    else None
+                )
                 redirect_location = state.redirect_location
-            self.send_response(status_code)
-            if redirect_location is not None:
-                self.send_header("Location", redirect_location)
-            self.send_header(
-                "Content-Length",
-                str(len(body) if content_length is None else content_length),
-            )
-            self.end_headers()
             try:
+                if state.response_delay_seconds:
+                    time.sleep(state.response_delay_seconds)
+                self.send_response(status_code)
+                if redirect_location is not None:
+                    self.send_header("Location", redirect_location)
+                if retry_after is not None:
+                    self.send_header("Retry-After", retry_after)
+                if not omit_content_length:
+                    self.send_header(
+                        "Content-Length",
+                        str(len(body) if content_length is None else content_length),
+                    )
+                self.end_headers()
                 self.wfile.write(body)
             except OSError:
                 # The API closes the streaming response after inspecting headers.
                 pass
+            finally:
+                with state.lock:
+                    state.active_requests -= 1
 
         def log_message(self, format: str, *args) -> None:
             return
@@ -195,13 +256,21 @@ def controlled_https_origin(
 
 
 @pytest.fixture
-def client(
+def all_roles_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     controlled_https_origin: ControlledOrigin,
+    controlled_s3_endpoint: str,
 ):
+    """Boot the real API + worker role composition in one process."""
     monkeypatch.setenv("DATABASE_URL", test_database_url())
     monkeypatch.setenv("SOURCE_URL_ENCRYPTION_KEY", TEST_SOURCE_URL_ENCRYPTION_KEY)
+    monkeypatch.setenv("APP_ROLE", "all")
+    monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
+    monkeypatch.setenv("S3_REGION", "us-east-1")
+    monkeypatch.setenv("S3_ENDPOINT_URL", controlled_s3_endpoint)
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "test-secret-key")
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
@@ -220,3 +289,58 @@ def client(
             connection.execute(delete(TranscriptionJob))
             connection.execute(delete(Credential))
             connection.execute(delete(Account))
+        store = test_client.app.state.object_store
+        for prefix in ("media/", "results/"):
+            try:
+                response = store.client.list_objects_v2(
+                    Bucket=store.bucket, Prefix=prefix
+                )
+            except Exception:
+                continue
+            for item in response.get("Contents", []):
+                store.delete(item["Key"])
+
+
+@pytest.fixture
+def client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    controlled_https_origin: ControlledOrigin,
+    controlled_s3_endpoint: str,
+):
+    monkeypatch.setenv("DATABASE_URL", test_database_url())
+    monkeypatch.setenv("SOURCE_URL_ENCRYPTION_KEY", TEST_SOURCE_URL_ENCRYPTION_KEY)
+    monkeypatch.setenv("APP_ROLE", "api")
+    monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
+    monkeypatch.setenv("S3_REGION", "us-east-1")
+    monkeypatch.setenv("S3_ENDPOINT_URL", controlled_s3_endpoint)
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "test-secret-key")
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    (input_dir / "sample.wav").write_bytes(b"test media")
+    monkeypatch.setenv("APP_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("APP_OUTPUT_DIR", str(output_dir))
+    monkeypatch.setattr("app.main.Transcriber", FakeTranscriber)
+
+    with TestClient(app) as test_client:
+        test_client.app.state.test_source_url = controlled_https_origin.source_url
+        test_client.app.state.test_source = controlled_https_origin
+        yield test_client
+        engine = test_client.app.state.database_engine
+        with engine.begin() as connection:
+            connection.execute(delete(IdempotencyRecord))
+            connection.execute(delete(TranscriptionJob))
+            connection.execute(delete(Credential))
+            connection.execute(delete(Account))
+        store = test_client.app.state.object_store
+        for prefix in ("media/", "results/"):
+            try:
+                response = store.client.list_objects_v2(
+                    Bucket=store.bucket, Prefix=prefix
+                )
+            except Exception:
+                continue
+            for item in response.get("Contents", []):
+                store.delete(item["Key"])

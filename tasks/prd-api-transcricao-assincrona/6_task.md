@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [5.0]
 gate: "rtk pytest -q -k v03_processing"
