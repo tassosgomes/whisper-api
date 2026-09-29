@@ -68,13 +68,19 @@ class ResourceSampler:
 
     def summary(self) -> dict[str, float | int]:
         cpu = [sample.cpu_percent for sample in self.samples]
-        memory = [self.baseline_memory_mb, *(sample.memory_mb for sample in self.samples)]
+        memory = [
+            self.baseline_memory_mb,
+            *(sample.memory_mb for sample in self.samples),
+        ]
         return {
             "baselineMemoryMb": round(self.baseline_memory_mb, 2),
             "peakMemoryMb": round(max(memory), 2),
             "averageCpuPercent": round(sum(cpu) / len(cpu), 2) if cpu else 0.0,
             "peakCpuPercent": round(max(cpu), 2) if cpu else 0.0,
-            "peakThreads": max((sample.threads for sample in self.samples), default=self.process.num_threads()),
+            "peakThreads": max(
+                (sample.threads for sample in self.samples),
+                default=self.process.num_threads(),
+            ),
             "sampleCount": len(self.samples),
             "sampleIntervalSeconds": self.interval_seconds,
         }

@@ -23,17 +23,28 @@ class JobManager:
     """Keep job states in memory and run one transcription at a time."""
 
     def __init__(self) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="transcription")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="transcription"
+        )
         self._jobs: dict[str, dict] = {}
         self._lock = Lock()
 
-    def submit(self, relative_path: str, transcriber: object) -> dict:
+    def submit(
+        self,
+        relative_path: str,
+        transcriber: object,
+        *,
+        account_id: str,
+        credential_id: str,
+    ) -> dict:
         job_id = str(uuid4())
         job = {
             "id": job_id,
             "status": "queued",
             "input": relative_path,
             "createdAt": _timestamp(),
+            "accountId": account_id,
+            "credentialId": credential_id,
         }
         with self._lock:
             self._jobs[job_id] = job
@@ -42,12 +53,25 @@ class JobManager:
             except Exception:
                 del self._jobs[job_id]
                 raise
-            return copy.deepcopy(job)
+            return self._public_job(job)
 
-    def get(self, job_id: str) -> dict | None:
+    def get(self, job_id: str, *, account_id: str, credential_id: str) -> dict | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return copy.deepcopy(job) if job is not None else None
+            if (
+                job is None
+                or job["accountId"] != account_id
+                or job["credentialId"] != credential_id
+            ):
+                return None
+            return self._public_job(job)
+
+    @staticmethod
+    def _public_job(job: dict) -> dict:
+        public = copy.deepcopy(job)
+        public.pop("accountId", None)
+        public.pop("credentialId", None)
+        return public
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)

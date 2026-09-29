@@ -15,7 +15,9 @@ from app.transcription.whisper import Transcriber
 def main() -> int:
     parser = argparse.ArgumentParser(description="Transcrição local de áudio ou vídeo")
     commands = parser.add_subparsers(dest="command", required=True)
-    transcribe = commands.add_parser("transcribe", help="Transcreve um arquivo de /data/input")
+    transcribe = commands.add_parser(
+        "transcribe", help="Transcreve um arquivo de /data/input"
+    )
     transcribe.add_argument("path", help="Caminho relativo a /data/input")
     args = parser.parse_args()
 

@@ -17,9 +17,9 @@ Adotar um **monólito modular como fronteira inicial do produto**, organizado pe
 
 O grupo inicial não cria um serviço por domínio. Cada domínio deve ter módulo e interfaces próprios para que a separação interna sobreviva a mudanças de processo. Um módulo só deve ser extraído depois quando medições ou responsabilidades mostrarem uma necessidade de escala independente, isolamento de falha ou segurança, cadência de publicação incompatível, dependência externa própria ou manutenção por equipe distinta. A extração exige ADR com contexto, evidência e impacto operacional.
 
-A prova de conceito atual usa Python, FastAPI, `faster-whisper`, estado de jobs em memória e arquivos locais. Isso é evidência da implementação existente, não uma decisão de plataforma para produção. O adaptador de transcrição deve permanecer substituível sem vazar tipos do motor para contratos públicos.
+A aplicação e o runtime desta evolução usam Python/FastAPI, e o adaptador de transcrição permanece substituível sem vazar tipos do motor para contratos públicos. A prova de conceito ainda mantém jobs em memória e arquivos locais; isso não define a persistência de produção.
 
-As decisões de runtime, provedor de banco e backend de armazenamento temporário permanecem abertas. O baseline do code-for-coders e suas ADRs foram consultados como contexto do consumidor, mas não são decisões herdadas pelo Whisper: os produtos têm propriedade de dados e necessidades operacionais distintas.
+O runtime permanece Python/FastAPI, conforme a aplicação atual. PostgreSQL é o banco inicial do Whisper, com schema versionado por Alembic desde a primeira tabela; o estado de jobs será acrescentado em migration posterior. O backend de armazenamento temporário permanece em aberto. O baseline do code-for-coders e suas ADRs foram consultados como contexto do consumidor, mas não são decisões herdadas pelo Whisper: os produtos têm propriedade de dados e necessidades operacionais distintas.
 
 ## Princípios de Interação entre Domínios
 

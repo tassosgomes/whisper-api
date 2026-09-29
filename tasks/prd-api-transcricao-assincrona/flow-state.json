@@ -4,10 +4,10 @@
   "original_base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
   "base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
   "target_ref": null,
-  "last_checkpoint": "d69ab537102ae5fcc5abfa29e2a4177fef8f0be1",
+  "last_checkpoint": "1f38be497a0887a8656433675f65cd23fbb6bafe",
   "phase": "checkpoint",
-  "active_task": "3.0",
-  "attempt": 1,
+  "active_task": "4.0",
+  "attempt": 2,
   "max_attempts": 3,
   "full_attempt": 0,
   "transport_retries": 1,
@@ -19,19 +19,21 @@
   "validated_commit": null,
   "validated_tree": null,
   "last_result": {
-    "run_id": "run.8BBEKNEO",
+    "run_id": "run.Xj2YHIZO",
     "role": "implementer",
-    "mode": "implement",
-    "task": "3.0",
-    "attempt": "1/3",
+    "mode": "fix",
+    "task": "4.0",
+    "attempt": "2/3",
     "outcome": "implementation_complete",
-    "gate": "passed"
+    "gate": "passed",
+    "note": "handler RFC 9457 + asserções contratuais nos testes"
   },
   "pending_delegation": {
     "role": "validator",
-    "mode": "focused",
-    "task": "3.0",
-    "attempt": "1/3"
+    "mode": "revalidation",
+    "task": "4.0",
+    "attempt": "2/3",
+    "note": "com contexto de ambiente .venv"
   },
   "history": [
     {

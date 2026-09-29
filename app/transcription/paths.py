@@ -30,7 +30,9 @@ def resolve_input_path(relative_path: str, input_dir: Path) -> Path:
     if not candidate.is_relative_to(root):
         raise ValueError("O arquivo precisa estar dentro de data/input.")
     if candidate.suffix.lower() not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"Extensão de arquivo não permitida: {candidate.suffix or '(nenhuma)'}.")
+        raise ValueError(
+            f"Extensão de arquivo não permitida: {candidate.suffix or '(nenhuma)'}."
+        )
     if not candidate.exists():
         raise FileNotFoundError(f"Arquivo não encontrado: {relative_path}")
     if not candidate.is_file():

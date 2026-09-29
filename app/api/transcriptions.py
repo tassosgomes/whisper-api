@@ -2,9 +2,12 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from app.access.credentials import AuthenticatedCredential
 from app.transcription.paths import resolve_input_path
 
 
@@ -16,8 +19,26 @@ class TranscriptionRequest(BaseModel):
     model: str | None = None
 
 
+def authenticate_api_key(
+    request: Request,
+    api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> AuthenticatedCredential:
+    credential = request.app.state.credential_store.authenticate(api_key)
+    if credential is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credencial inválida.",
+            headers={"WWW-Authenticate": "APIKey"},
+        )
+    return credential
+
+
 @router.post("/v1/transcriptions", status_code=status.HTTP_202_ACCEPTED)
-def create_transcription(payload: TranscriptionRequest, request: Request) -> dict:
+def create_transcription(
+    payload: TranscriptionRequest,
+    request: Request,
+    credential: Annotated[AuthenticatedCredential, Depends(authenticate_api_key)],
+) -> dict:
     settings = request.app.state.settings
     if payload.model is not None and payload.model != settings.WHISPER_MODEL_NAME:
         raise HTTPException(
@@ -33,15 +54,30 @@ def create_transcription(payload: TranscriptionRequest, request: Request) -> dic
             detail="Caminho de entrada inválido ou arquivo indisponível.",
         ) from exc
 
-    job = request.app.state.jobs.submit(payload.path, request.app.state.transcriber)
+    job = request.app.state.jobs.submit(
+        payload.path,
+        request.app.state.transcriber,
+        account_id=str(credential.account_id),
+        credential_id=str(credential.credential_id),
+    )
     return {"id": job["id"], "status": job["status"], "input": job["input"]}
 
 
 @router.get("/v1/transcriptions/{job_id}")
-def get_transcription(job_id: str, request: Request) -> dict:
-    job = request.app.state.jobs.get(job_id)
+def get_transcription(
+    job_id: str,
+    request: Request,
+    credential: Annotated[AuthenticatedCredential, Depends(authenticate_api_key)],
+) -> dict:
+    job = request.app.state.jobs.get(
+        job_id,
+        account_id=str(credential.account_id),
+        credential_id=str(credential.credential_id),
+    )
     if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job não encontrado.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job não encontrado."
+        )
     return job
 
 

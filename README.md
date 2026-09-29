@@ -16,6 +16,11 @@ cp .env.example .env
 
 O Compose publica a API somente em `127.0.0.1:8000`. Por padrão, usa o modelo `medium`, limita o container a oito CPUs e define o mesmo número de threads de inferência. Os arquivos de entrada ficam somente leitura no container; os resultados são gravados em `data/output`.
 
+O Compose inicia PostgreSQL com volume próprio; a API aguarda o banco saudável
+e aplica as migrations Alembic ao iniciar. Credenciais de conexão vêm das
+variáveis de ambiente do `.env`. O arquivo `.env.example` contém somente
+valores locais de exemplo, não segredos de implantação.
+
 Se o usuário do host não tiver UID/GID `1000`, ajuste `LOCAL_UID` e `LOCAL_GID` em `.env` para os valores de `id -u` e `id -g`. Isso permite que o container grave os artefatos com a propriedade correta.
 
 ## Preparar a imagem e os modelos
@@ -107,6 +112,11 @@ As variáveis do Compose podem ser definidas em `.env` ou no ambiente do comando
 | `JOB_CONCURRENCY` | `1` | Concorrência; a PoC exige um job por vez |
 | `APP_INPUT_DIR` | `/data/input` | Diretório montado como somente leitura |
 | `APP_OUTPUT_DIR` | `/data/output` | Diretório de Markdown e métricas |
+| `POSTGRES_DB` | `whisper` | Banco PostgreSQL local da aplicação |
+| `POSTGRES_USER` | `whisper` | Usuário PostgreSQL local |
+| `POSTGRES_PASSWORD` | valor local de exemplo | Senha local PostgreSQL; substitua antes de qualquer implantação compartilhada |
+| `TEST_POSTGRES_DB`, `TEST_POSTGRES_USER`, `TEST_POSTGRES_PASSWORD` | valores locais de exemplo | Credenciais do banco de integração isolado |
+| `TEST_POSTGRES_PORT` | `55432` | Porta local do banco de integração isolado |
 
 Para selecionar outro modelo, confirme que ele foi preparado e ajuste `WHISPER_MODEL_NAME`. O caminho padrão acompanha esse nome. Se definir `WHISPER_MODEL_PATH` manualmente, aponte para o diretório correspondente.
 
@@ -134,7 +144,7 @@ data/output/   transcrições Markdown e métricas JSON
 models/        snapshots locais de small, medium e large-v3
 ```
 
-Mídias, modelos e saídas são ignorados pelo Git. A PoC mantém os jobs em memória; reiniciar o container apaga o estado dos jobs, mas preserva os arquivos nos volumes locais.
+Mídias, modelos e saídas são ignorados pelo Git. Jobs continuam em memória nesta fatia; reiniciar o container apaga seu estado. Contas e verificadores das API Keys ficam no volume próprio do PostgreSQL.
 
 ## Operação do piloto
 
@@ -153,19 +163,33 @@ ou expirado retorna `404` neutro. O segredo da API Key não é o segredo
 
 ### 1. Criar conta e API Key
 
-1. Crie a conta do cliente no armazenamento operacional de credenciais
-   (conta genérica, sem conceito de curso/aula).
-2. Gere um `credential_id` estável por chave e um segredo de alta entropia.
-   Persista somente verificador/hash e metadados (conta, `credential_id`,
-   data de criação, último uso, situação de revogação). Nunca persista o
-   segredo em claro.
-3. Cadastre o destino HTTPS do webhook da conta nesta mesma ocasião ou
+1. Crie a conta e a primeira chave. O comando imprime a API Key uma vez;
+   entregue somente o campo `apiKey` pelo canal seguro:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli provision \
+     --account-name "Cliente piloto"
+   ```
+
+2. Para emitir outra credencial para uma conta existente, use o `accountId`
+   retornado na criação. Cada nova credencial recebe seu próprio
+   `credential_id`:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli issue \
+     --account-id <account-id>
+   ```
+
+3. O serviço persiste somente o hash e metadados (conta, `credential_id`,
+   permissões iniciais, criação, último uso, rotação e revogação). Nunca
+   persista a chave em claro.
+4. Cadastre o destino HTTPS do webhook da conta nesta mesma ocasião ou
    depois (seção 6); a chave funciona sem webhook, mas o aviso terminal só
    é entregue com destino configurado.
 
 ### 2. Entregar o segredo uma única vez
 
-1. Apresente o segredo ao cliente uma única vez, por canal seguro (TLS).
+1. Apresente `apiKey` ao cliente uma única vez, por canal seguro (TLS).
 2. Registre data/hora da entrega e quem recebeu. Após a entrega, o segredo
    não pode ser recuperado pelo operador: consultas futuras mostram apenas
    metadados.
@@ -174,18 +198,31 @@ ou expirado retorna `404` neutro. O segredo da API Key não é o segredo
 
 ### 3. Consultar metadados sem recuperar o segredo
 
-1. Para auditoria ou suporte, consulte apenas metadados: conta,
+1. Para auditoria ou suporte, consulte apenas metadados com o
+   `credentialId` recebido na operação:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli metadata \
+     --credential-id <credential-id>
+   ```
+
+2. A consulta mostra conta,
    `credential_id`, data de criação, permissões iniciais, último uso e
    revogação.
-2. Nunca reexiba, exporte ou registre o segredo em claro em logs, traces,
+3. Nunca reexiba, exporte ou registre o segredo em claro em logs, traces,
    erros, tickets ou payloads. Se o segredo foi perdido, não tente
    recuperá-lo: execute a rotação (seção 4).
 
 ### 4. Rotacionar a API Key (mesmo `credential_id`)
 
-1. Gere um novo segredo mantendo o mesmo `credential_id`. O novo segredo
-   conserva o acesso aos jobs existentes daquela credencial.
-2. Entregue o novo segredo uma única vez (mesmo rito da seção 2) e confirme
+1. Gere a chave substituta mantendo o mesmo `credential_id`:
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli rotate \
+     --credential-id <credential-id>
+   ```
+
+2. Entregue o `apiKey` exibido uma única vez (mesmo rito da seção 2) e confirme
    o recebimento antes de desativar o antigo, salvo comprometimento.
 3. Invalide o segredo antigo: a chave antiga deixa de autorizar chamadas
    (`401`). A rotação da API Key não afeta o material de assinatura do
@@ -193,9 +230,16 @@ ou expirado retorna `404` neutro. O segredo da API Key não é o segredo
 
 ### 5. Revogar a API Key
 
-1. Marque a credencial como revogada no armazenamento operacional. Chamadas
+1. Revogue a credencial pelo `credentialId`. Chamadas
    com chave revogada recebem `401`, sem revelar dados de jobs.
-2. Registre data/hora, motivo e responsável. A revogação é imediata e não
+
+   ```bash
+   docker compose exec transcriber python -m app.access.cli revoke \
+     --credential-id <credential-id>
+   ```
+
+2. Registre data/hora, motivo e responsável no processo operacional. A
+   revogação é imediata e não
    reexpõe o segredo.
 
 ### 6. Cadastrar e rotacionar o destino HTTPS e o material do webhook
@@ -250,6 +294,19 @@ nunca segredos, URLs assinadas (`sourceUrl`), mídia ou transcrição.
   `.env.example` ou no repositório.
 
 ### 9. Conta, chave e destino de teste
+
+O serviço `postgres-test` usa uma base e o volume `postgres_test_data`,
+separados do PostgreSQL local da aplicação. Para executar os testes de
+autenticação, carregue as variáveis do exemplo no shell e inicie somente o
+serviço de teste:
+
+```bash
+set -a
+. ./.env
+set +a
+docker compose --profile test up -d postgres-test
+rtk pytest -q -k v01_access
+```
 
 Para fumaça e integração do piloto, provisione conta, chave e destino
 isolados (banco, bucket e receptor HTTPS de teste), com material de
