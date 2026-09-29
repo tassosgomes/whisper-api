@@ -3,13 +3,12 @@
   "branch": "feature/api-transcricao-assincrona",
   "original_base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
   "base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
-  "target_ref": null,
-  "last_checkpoint": "2f85818935a013538fa0d4aea7d9695c22dbf73e",
-  "phase": "checkpoint",
-  "active_task": "8.0",
+"target_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
+  "last_checkpoint": "91ce2f010c742f7aa3ed806eb9c6de2f8e4458de",
+  "phase": "full_validation",
+  "active_task": null,
   "attempt": 1,
-  "max_attempts": 3,
-  "full_attempt": 0,
+  "full_attempt": 1,
   "intervention_round": 1,
   "intervention_note": "dono autorizou nova rodada para task 7.0 escalando validator para kind=codex model=gpt-6-sol effort=high (2026-09-28)",
   "transport_retries": 3,
@@ -18,21 +17,21 @@
   "delivery": "pr",
   "worktree": "/home/tsgomes/github-tassosgomes/whisper-api-transcricao-flow",
   "plan_approved": "2026-09-28 pelo dono; atualizar tasks.md no primeiro checkpoint",
-  "validated_commit": null,
-  "validated_tree": null,
+  "validated_commit": "91ce2f010c742f7aa3ed806eb9c6de2f8e4458de",
+  "validated_tree": "9911a34a43a303df8fbab5aa83b5df46d2935b2d",
   "last_result": {
-    "run_id": "run.pnALaBd6",
+    "run_id": "run.mXNHTcCc",
     "role": "validator",
-    "mode": "focused",
-    "task": "8.0",
-    "attempt": "1/3",
-    "outcome": "approved"
+    "mode": "full",
+    "outcome": "approved",
+    "gate": "passed",
+    "note": "47 testes, matriz completa, 5 mutantes detectados; 3 recomendações não bloqueantes"
   },
   "pending_delegation": {
     "role": "integrator",
-    "mode": "checkpoint-task",
-    "task": "8.0",
-    "attempt": "1/3"
+    "mode": "complete-prd",
+    "delivery": "pr",
+    "target_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5"
   },
   "history": [
     {
