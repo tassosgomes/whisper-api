@@ -4,13 +4,15 @@
   "original_base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
   "base_ref": "6351f8fae9fcc52cbd5ddd5ec22443042f98bcc5",
   "target_ref": null,
-  "last_checkpoint": "b8718697f43fe3881c72369ce7c39066e62802bf",
+  "last_checkpoint": "b7036497b448fee73938cb79580ae99e12fb98f8",
   "phase": "checkpoint",
-  "active_task": "6.0",
-  "attempt": 3,
+  "active_task": "7.0",
+  "attempt": 4,
   "max_attempts": 3,
   "full_attempt": 0,
-  "transport_retries": 2,
+  "intervention_round": 1,
+  "intervention_note": "dono autorizou nova rodada para task 7.0 escalando validator para kind=codex model=gpt-6-sol effort=high (2026-09-28)",
+  "transport_retries": 3,
   "routing_override": "dono impôs validator=codex em 2026-09-28 (claude sem cota); --kind=codex por chamada",
   "specs": ["techspec.md"],
   "delivery": "pr",
@@ -19,19 +21,20 @@
   "validated_commit": null,
   "validated_tree": null,
   "last_result": {
-    "run_id": "run.d1i6SkjL",
+    "run_id": "run.xtIpTS4E",
     "role": "validator",
     "mode": "revalidation",
-    "task": "6.0",
-    "attempt": "3/3",
+    "task": "7.0",
+    "attempt": "4/3",
     "outcome": "approved",
-    "note": "aprovada na tentativa 3/3; transporte anterior run.Ks8MqKtO sem efeitos"
+    "gate": "passed",
+    "note": "rodada pós-intervenção (gpt-6-sol high); gate exit 0 em 3 execuções; falha anterior = flakiness de fixture; recomendações não bloqueantes"
   },
   "pending_delegation": {
     "role": "integrator",
     "mode": "checkpoint-task",
-    "task": "6.0",
-    "attempt": "3/3"
+    "task": "7.0",
+    "attempt": "4/3"
   },
   "history": [
     {

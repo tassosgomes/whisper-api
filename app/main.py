@@ -96,6 +96,10 @@ async def lifespan(application: FastAPI):
             access_key_id=settings.S3_ACCESS_KEY_ID,
             secret_access_key=settings.S3_SECRET_ACCESS_KEY,
         )
+        # ADR-001: valida a política efetiva do bucket usado pela aplicação
+        # em runtime e falha fechada se versionamento Enabled ou Object Lock
+        # ativo (aplica-se aos papéis api, worker e all).
+        application.state.object_store.ensure_retention_compliant()
         application.state.jobs = JobManager(
             database_engine,
             source_url_cipher,

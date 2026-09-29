@@ -49,7 +49,7 @@ V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso a
 - [x] 4.0 Autenticar e isolar chamadas por conta e credencial
 - [x] 5.0 Aceitar jobs idempotentes após iniciar aquisição
 - [x] 6.0 Baixar, validar e transcrever mídia com estado recuperável
-- [ ] 7.0 Servir resultado versionado e expurgar dados vencidos
+- [x] 7.0 Servir resultado versionado e expurgar dados vencidos
 - [ ] 8.0 Entregar webhook terminal assinado e comprovar a jornada
 
 ## Verificação herdada

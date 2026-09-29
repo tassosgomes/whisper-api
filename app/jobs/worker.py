@@ -14,11 +14,17 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from app.jobs.models import TranscriptionJob
+from app.jobs.retention import (
+    RETENTION_SCAN_INTERVAL_SECONDS,
+    TERMINAL_RETENTION,
+    TERMINAL_STATUSES,
+    delay_until_next_scan,
+)
 from app.jobs.security import SourceURLCipher
 from app.monitoring.metrics import JobProcessingMetrics, ResourceSampler
 from app.service import public_result_payload
@@ -89,6 +95,13 @@ class JobWorker:
             threading.Thread(
                 target=self._processing_loop,
                 name="media-transcription",
+                daemon=True,
+            )
+        )
+        self._threads.append(
+            threading.Thread(
+                target=self._retention_loop,
+                name="terminal-retention-cleanup",
                 daemon=True,
             )
         )
@@ -223,6 +236,119 @@ class JobWorker:
                 )
                 return True
         return True
+
+    def run_retention_once(self) -> bool:
+        """Delete expired terminal data and unreferenced temporary bucket objects."""
+        now = _utc_now()
+        cutoff = now - TERMINAL_RETENTION
+        did_work = False
+        try:
+            with self._sessions() as session:
+                expired_jobs = session.scalars(
+                    select(TranscriptionJob).where(
+                        TranscriptionJob.status.in_(TERMINAL_STATUSES),
+                        TranscriptionJob.terminal_at.is_not(None),
+                        TranscriptionJob.terminal_at <= cutoff,
+                    )
+                ).all()
+        except Exception as exc:
+            self._record_retention_failure(exc)
+            return False
+
+        for job in expired_jobs:
+            try:
+                self._object_store.delete(job.result_object_key)
+                self._object_store.delete(job.media_object_key)
+                with self._sessions.begin() as session:
+                    deleted = session.execute(
+                        delete(TranscriptionJob).where(
+                            TranscriptionJob.id == job.id,
+                            TranscriptionJob.status.in_(TERMINAL_STATUSES),
+                            TranscriptionJob.terminal_at <= cutoff,
+                        )
+                    ).rowcount
+                if deleted:
+                    self._metrics.increment("retentionJobsPurged")
+                    did_work = True
+            except Exception as exc:
+                self._record_retention_failure(exc)
+
+        try:
+            did_work = self._purge_orphan_objects() or did_work
+        except Exception as exc:
+            self._record_retention_failure(exc)
+        self._metrics.increment("retentionCleanupRuns")
+        return did_work
+
+    def _purge_orphan_objects(self) -> bool:
+        with self._sessions() as session:
+            rows = session.execute(
+                select(
+                    TranscriptionJob.id,
+                    TranscriptionJob.status,
+                    TranscriptionJob.media_object_key,
+                    TranscriptionJob.result_object_key,
+                )
+            ).all()
+        statuses = {row.id: row.status for row in rows}
+        referenced_keys = {
+            key
+            for row in rows
+            for key in (row.media_object_key, row.result_object_key)
+            if key
+        }
+        did_work = False
+        for prefix in ("media/", "results/"):
+            for key in self._object_store.list_keys(prefix):
+                if key in referenced_keys:
+                    continue
+                job_id = key[len(prefix) :].split("/", 1)[0]
+                if not job_id or (
+                    job_id in statuses and statuses[job_id] not in TERMINAL_STATUSES
+                ):
+                    continue
+                try:
+                    self._object_store.delete(key)
+                    self._metrics.increment("orphanObjectsPurged")
+                    did_work = True
+                except Exception as exc:
+                    self._record_retention_failure(exc)
+        return did_work
+
+    def earliest_retention_terminal_at(self) -> datetime | None:
+        """Oldest terminal_at among terminal jobs (drives the next sweep)."""
+        try:
+            with self._sessions() as session:
+                earliest = session.scalar(
+                    select(func.min(TranscriptionJob.terminal_at)).where(
+                        TranscriptionJob.status.in_(TERMINAL_STATUSES),
+                        TranscriptionJob.terminal_at.is_not(None),
+                    )
+                )
+        except Exception:
+            return None
+        if earliest is not None and earliest.tzinfo is None:
+            earliest = earliest.replace(tzinfo=timezone.utc)
+        return earliest
+
+    def retention_delay_seconds(self, now: datetime | None = None) -> float:
+        """Sleep until the next sweep: min(interval, next 24 h expiry).
+
+        Guarantees the physical purge runs no later than each job's
+        retention deadline instead of up to one full scan interval late.
+        """
+        current = now if now is not None else _utc_now()
+        try:
+            earliest = self.earliest_retention_terminal_at()
+        except Exception:
+            return float(RETENTION_SCAN_INTERVAL_SECONDS)
+        if earliest is None:
+            return float(RETENTION_SCAN_INTERVAL_SECONDS)
+        return delay_until_next_scan(current, earliest)
+
+    def _record_retention_failure(self, exc: Exception) -> None:
+        self._metrics.observe_failure("retention", "cleanup_failed")
+        logger.warning("Retention cleanup deferred error_type=%s", type(exc).__name__)
 
     def _download_with_retries(
         self,
@@ -539,6 +665,11 @@ class JobWorker:
                 did_work = False
             if not did_work:
                 self._stop.wait(0.5)
+
+    def _retention_loop(self) -> None:
+        while not self._stop.is_set():
+            self.run_retention_once()
+            self._stop.wait(self.retention_delay_seconds())
 
     def _delete_object_safely(self, key: str | None, job_id: str) -> None:
         try:

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+import logging
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.access.credentials import AuthenticatedCredential
 from app.jobs.executor import IdempotencyKeyReused
@@ -19,6 +20,7 @@ from app.transcription.source import (
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class TranscriptionRequest(BaseModel):
@@ -26,6 +28,24 @@ class TranscriptionRequest(BaseModel):
 
     source_url: Annotated[str, Field(alias="sourceUrl", min_length=1)]
     client_reference: Annotated[str | None, Field(alias="clientReference")] = None
+
+
+class TranscriptionResultSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    start_ms: Annotated[int, Field(alias="startMs", ge=0)]
+    end_ms: Annotated[int, Field(alias="endMs", ge=0)]
+    text: str
+
+
+class TranscriptionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_version: Literal[1] = Field(alias="schemaVersion")
+    job_id: Annotated[str, Field(alias="jobId", min_length=1)]
+    language: Literal["pt-BR"]
+    duration_ms: Annotated[int, Field(alias="durationMs", ge=0)]
+    segments: list[TranscriptionResultSegment]
 
 
 def authenticate_api_key(
@@ -139,6 +159,61 @@ def get_transcription(
             status_code=status.HTTP_404_NOT_FOUND, detail="Job não encontrado."
         )
     return job
+
+
+@router.get("/v1/transcriptions/{job_id}/result", response_model=TranscriptionResult)
+def get_transcription_result(
+    job_id: str,
+    request: Request,
+    credential: Annotated[AuthenticatedCredential, Depends(authenticate_api_key)],
+) -> TranscriptionResult:
+    reference = request.app.state.jobs.get_result_reference(
+        job_id,
+        account_id=credential.account_id,
+        credential_id=credential.credential_id,
+    )
+    if reference is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job não encontrado."
+        )
+    if reference["status"] != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "title": "Resultado indisponível",
+                "code": "RESULT_NOT_AVAILABLE",
+                "detail": "O resultado ainda não está disponível.",
+            },
+        )
+
+    result_key = reference["resultObjectKey"]
+    if not result_key:
+        raise _result_read_error()
+    try:
+        result = TranscriptionResult.model_validate_json(
+            request.app.state.object_store.get_bytes(result_key)
+        )
+        if result.job_id != job_id:
+            raise ValueError("O objeto não corresponde ao job solicitado.")
+    except (ValidationError, ValueError):
+        raise _result_read_error() from None
+    except Exception as exc:
+        logger.warning(
+            "Could not read transcription result error_type=%s", type(exc).__name__
+        )
+        raise _result_read_error() from None
+    return result
+
+
+def _result_read_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail={
+            "title": "Erro interno",
+            "code": "INTERNAL_ERROR",
+            "detail": "Não foi possível recuperar o resultado.",
+        },
+    )
 
 
 @router.get("/health")

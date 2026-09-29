@@ -15,6 +15,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from app.jobs.models import IdempotencyRecord, TranscriptionJob
+from app.jobs.retention import is_terminal_expired
 from app.jobs.security import SourceURLCipher
 from app.monitoring.metrics import DownloadStartMetrics
 from app.transcription.paths import InvalidSourceURL
@@ -241,7 +242,28 @@ class JobManager:
                     TranscriptionJob.credential_id == credential_id,
                 )
             ).scalar_one_or_none()
-            return _public_job(job) if job is not None else None
+            if job is None or is_terminal_expired(job.terminal_at, _utc_now()):
+                return None
+            return _public_job(job)
+
+    def get_result_reference(
+        self, job_id: str, *, account_id, credential_id
+    ) -> dict | None:
+        """Resolve an unexpired result only after matching its owning credential."""
+        with self._sessions() as session:
+            job = session.execute(
+                select(TranscriptionJob).where(
+                    TranscriptionJob.id == job_id,
+                    TranscriptionJob.account_id == account_id,
+                    TranscriptionJob.credential_id == credential_id,
+                )
+            ).scalar_one_or_none()
+            if job is None or is_terminal_expired(job.terminal_at, _utc_now()):
+                return None
+            return {
+                "status": job.status,
+                "resultObjectKey": job.result_object_key,
+            }
 
     def source_url_for_recovery(self, job_id: str) -> str | None:
         """Return a durable URL to the owning worker without exposing it over HTTP."""
