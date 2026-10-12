@@ -32,9 +32,11 @@ from app.jobs.models import NotificationEvent, WebhookSecret
 from app.monitoring.metrics import JobProcessingMetrics
 from app.transcription.paths import (
     InvalidSourceURL,
-    resolve_public_addresses,
+    TrustedDestinations,
+    resolve_destination_addresses,
     validate_source_url_syntax,
 )
+from app.transcription.pinned import open_pinned_connection
 
 
 logger = logging.getLogger(__name__)
@@ -99,12 +101,18 @@ class WebhookSecretCipher:
 class WebhookConfigStore:
     """Manage endpoint and signing-key configuration outside the public API."""
 
-    def __init__(self, engine: Engine, cipher: WebhookSecretCipher | None):
+    def __init__(
+        self,
+        engine: Engine,
+        cipher: WebhookSecretCipher | None,
+        trusted: TrustedDestinations | None = None,
+    ):
         self._sessions = sessionmaker(bind=engine, expire_on_commit=False)
         self._cipher = cipher
+        self._trusted = trusted or TrustedDestinations()
 
     def configure(self, account_id: UUID, url: str) -> str:
-        _validate_webhook_url(url)
+        _validate_webhook_url(url, self._trusted)
         secret = generate_webhook_secret()
         cipher = self._require_cipher()
         with self._sessions.begin() as session:
@@ -135,7 +143,7 @@ class WebhookConfigStore:
         return secret
 
     def set_endpoint(self, account_id: UUID, url: str) -> None:
-        _validate_webhook_url(url)
+        _validate_webhook_url(url, self._trusted)
         with self._sessions.begin() as session:
             account = session.execute(
                 select(Account).where(Account.id == account_id).with_for_update()
@@ -254,34 +262,26 @@ class _DeliveryClaim:
     attempt_count: int
 
 
-class _PinnedWebhookConnection(http.client.HTTPSConnection):
-    """HTTPS connection pinned to an address that passed the SSRF check."""
-
-    def __init__(self, hostname: str, port: int, address: str):
-        super().__init__(hostname, port, timeout=WEBHOOK_CONNECT_TIMEOUT_SECONDS)
-        self._approved_address = address
-
-    def connect(self) -> None:
-        sock = socket.create_connection(
-            (self._approved_address, self.port), timeout=self.timeout
-        )
-        try:
-            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-        except Exception:
-            sock.close()
-            raise
-
-
 class WebhookHTTPTransport:
-    """Post one signed body over pinned HTTPS without following redirects."""
+    """Post one signed body over a pinned connection without following redirects.
+
+    ``trusted`` is the ``TRUSTED_PRIVATE_WEBHOOKS`` allowlist (empty by default).
+    """
+
+    def __init__(self, trusted: TrustedDestinations | None = None) -> None:
+        self.trusted = trusted or TrustedDestinations()
 
     def send(self, url: str, body: bytes, headers: dict[str, str]) -> WebhookHTTPResult:
-        parsed, hostname, port = _validate_webhook_url(url)
-        addresses = resolve_public_addresses(hostname, port)
+        parsed, hostname, port = _validate_webhook_url(url, self.trusted)
+        addresses = resolve_destination_addresses(
+            hostname, port, parsed.scheme, self.trusted
+        )
         family, address = addresses[0]
         if family not in {socket.AF_INET, socket.AF_INET6}:
             raise InvalidSourceURL("Destino de webhook inválido.")
-        connection = _PinnedWebhookConnection(hostname, port, address)
+        connection = open_pinned_connection(
+            parsed.scheme, hostname, port, address, WEBHOOK_CONNECT_TIMEOUT_SECONDS
+        )
         response = None
         try:
             connection.connect()
@@ -715,18 +715,20 @@ def _decode_webhook_secret(secret: str) -> bytes:
     return raw
 
 
-def _validate_webhook_url(url: str):
+def _validate_webhook_url(url: str, trusted: TrustedDestinations | None = None):
     try:
-        parsed, hostname, port = validate_source_url_syntax(url)
+        parsed, hostname, port = validate_source_url_syntax(url, trusted)
     except InvalidSourceURL as exc:
         raise WebhookConfigurationError(
-            "O destino do webhook precisa ser uma URL HTTPS válida."
+            "O destino do webhook precisa ser uma URL HTTPS válida "
+            "(ou HTTP explicitamente listado em TRUSTED_PRIVATE_WEBHOOKS)."
         ) from exc
     try:
-        resolve_public_addresses(hostname, port)
+        resolve_destination_addresses(hostname, port, parsed.scheme, trusted)
     except InvalidSourceURL as exc:
         raise WebhookConfigurationError(
-            "O destino do webhook precisa resolver somente para endereços públicos."
+            "O destino do webhook precisa resolver somente para endereços "
+            "públicos ou listados em TRUSTED_PRIVATE_WEBHOOKS."
         ) from exc
     return parsed, hostname, port
 

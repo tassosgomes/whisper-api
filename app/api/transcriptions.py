@@ -73,7 +73,9 @@ def create_transcription(
     ],
 ) -> dict:
     try:
-        validate_source_url_syntax(payload.source_url)
+        validate_source_url_syntax(
+            payload.source_url, request.app.state.source_connector.trusted
+        )
         semantic_payload = payload.model_dump(
             mode="json", by_alias=True, exclude_unset=True
         )

@@ -17,9 +17,14 @@ from app.database import create_database_engine, database_url_from_env, upgrade_
 from app.jobs.executor import JobManager
 from app.jobs.security import SourceURLCipher
 from app.jobs.worker import JobWorker
-from app.jobs.webhooks import NotificationDispatcher, WebhookSecretCipher
+from app.jobs.webhooks import (
+    NotificationDispatcher,
+    WebhookHTTPTransport,
+    WebhookSecretCipher,
+)
 from app.monitoring.metrics import DownloadStartMetrics, JobProcessingMetrics
 from app.storage.s3 import S3ObjectStore
+from app.transcription.paths import TrustedDestinations
 from app.transcription.source import SourceConnector
 from app.transcription.whisper import Transcriber
 
@@ -42,6 +47,8 @@ class Settings:
     S3_ENDPOINT_URL: str | None
     S3_ACCESS_KEY_ID: str | None
     S3_SECRET_ACCESS_KEY: str | None
+    TRUSTED_PRIVATE_SOURCES: TrustedDestinations
+    TRUSTED_PRIVATE_WEBHOOKS: TrustedDestinations
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -63,6 +70,12 @@ class Settings:
             S3_ENDPOINT_URL=os.getenv("S3_ENDPOINT_URL") or None,
             S3_ACCESS_KEY_ID=os.getenv("S3_ACCESS_KEY_ID") or None,
             S3_SECRET_ACCESS_KEY=os.getenv("S3_SECRET_ACCESS_KEY") or None,
+            TRUSTED_PRIVATE_SOURCES=TrustedDestinations.from_env(
+                "TRUSTED_PRIVATE_SOURCES"
+            ),
+            TRUSTED_PRIVATE_WEBHOOKS=TrustedDestinations.from_env(
+                "TRUSTED_PRIVATE_WEBHOOKS"
+            ),
         )
         if settings.WHISPER_DEVICE != "cpu" or settings.WHISPER_COMPUTE_TYPE != "int8":
             raise ValueError(
@@ -95,11 +108,16 @@ async def lifespan(application: FastAPI):
         )
         application.state.webhook_secret_cipher = webhook_secret_cipher
         application.state.notification_dispatcher = NotificationDispatcher(
-            database_engine, webhook_secret_cipher, application.state.job_metrics
+            database_engine,
+            webhook_secret_cipher,
+            application.state.job_metrics,
+            transport=WebhookHTTPTransport(settings.TRUSTED_PRIVATE_WEBHOOKS),
         )
         application.state.model_loaded = False
         application.state.jobs = None
-        application.state.source_connector = SourceConnector()
+        application.state.source_connector = SourceConnector(
+            settings.TRUSTED_PRIVATE_SOURCES
+        )
         application.state.object_store = S3ObjectStore(
             bucket=settings.S3_BUCKET,
             region=settings.S3_REGION,
