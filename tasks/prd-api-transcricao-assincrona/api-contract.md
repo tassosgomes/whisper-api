@@ -20,7 +20,7 @@ schemas e restrições. O acordo cobre o recorte HTTP deste PRD, inclusive o web
 | Retries do webhook | Falhas transitórias repetidas por até 72 h com backoff exponencial e jitter; 2xx confirma, 3xx falha sem redirecionamento, 410 desativa, 429 reduz o ritmo; rotação planejada com dupla assinatura por 72 h | ADR-002; TechSpec Q-05 |
 | Idempotência | `Idempotency-Key` escopada por conta + `credential_id` + chave, retida por 120 s; mesmo JSON semântico retorna o mesmo job; corpo diferente resulta em 409 `IDEMPOTENCY_KEY_REUSED`; após a janela, nova chave de idempotência inicia novo job | TechSpec Q-06; PRD RF-02 |
 | Limite e formatos | Máximo de 5 GiB por arquivo; formatos `.mp4`, `.mkv`, `.webm`, `.mp3`, `.wav`, `.m4a` com validação real de formato/codec; antes do aceite, tamanho conhecido acima do limite (por exemplo, `Content-Length`) retorna 413 `MEDIA_SIZE_LIMIT_EXCEEDED` sem criar job | TechSpec Q-02 |
-| Aquisição da mídia | URL de leitura GET pré-assinada gerada pelo consumidor com validade efetiva mínima de 60 min; timeout de conexão de 10 s e inatividade de leitura de 60 s; quando o tamanho é desconhecido (por exemplo, chunked), a criação prossegue sem rejeição por tamanho e o limite é aplicado no streaming; se o streaming exceder 5 GiB, o job termina em `failed/MEDIA_SIZE_LIMIT_EXCEEDED`; até 3 tentativas totais para falhas transitórias (rede, timeout, HTTP 408/429/5xx) com full jitter de 0–5 s e 0–30 s; sem renovação automática; esgotadas as tentativas, `failed/SOURCE_UNAVAILABLE` | TechSpec Q-03/Q-04 |
+| Aquisição da mídia | URL GET pré-assinada de leitura gerada pelo consumidor para seu objeto privado. Endereço público exige HTTPS. http:// só é aceito para destino da allowlist de origens privadas (ADR-003); fora dela o contrato continua exigindo HTTPS, inclusive para host público. Validade efetiva mínima de 60 min desde a emissão. A URL não deve ser registrada em logs. Timeout de conexão de 10 s e inatividade de leitura de 60 s; quando o tamanho é desconhecido (por exemplo, chunked), a criação prossegue sem rejeição por tamanho e o limite é aplicado no streaming; se o streaming exceder 5 GiB, o job termina em `failed/MEDIA_SIZE_LIMIT_EXCEEDED`; até 3 tentativas totais para falhas transitórias (rede, timeout, HTTP 408/429/5xx) com full jitter de 0–5 s e 0–30 s; sem renovação automática; esgotadas as tentativas, `failed/SOURCE_UNAVAILABLE` | TechSpec Q-03/Q-04; ADR-003 |
 | Estados | downloading, queued, processing, completed, failed | PRD RF-03 |
 | Idioma e duração | pt-BR, até 2 horas por mídia | PRD; TechSpec Q-02 |
 | Retenção terminal | Metadados e resultado disponíveis por até 24 horas após terminalAt; mídia removida assim que desnecessária | PRD RF-05/RF-06; ADR-001 |
@@ -54,6 +54,8 @@ para a fase 2 (Q-08).
       "sourceUrl": "https://media.example.test/signed/arquivo.mp4?sig=not-a-real-signature",
       "clientReference": "asset-7891"
     }
+
+`sourceUrl`: URL GET pré-assinada de leitura gerada pelo consumidor para seu objeto privado. Endereço público exige HTTPS. http:// só é aceito para destino da allowlist de origens privadas (ADR-003); fora dela o contrato continua exigindo HTTPS, inclusive para host público. Validade efetiva mínima de 60 min desde a emissão. A URL não deve ser registrada em logs. O exemplo público acima permanece HTTPS.
 
     HTTP/1.1 202 Accepted
     Location: /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
