@@ -5,9 +5,10 @@
 # do compose de produção (o diretório que contém compose.yml e app.env).
 # Segredos ficam só nesse diretório e não entram no git.
 #
-# Uso:
-#   scripts/deploy.sh
-#   scripts/deploy.sh --force
+# Uso, a partir do clone ou do diretório do compose:
+#   ./deploy.sh
+#   ./scripts/deploy.sh
+#   ./deploy.sh --force
 #
 # DEPLOY_DIR  diretório do compose de produção
 # REPO_DIR    clone deste repositório
@@ -25,7 +26,9 @@ fi
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 if [[ -z "${REPO_DIR:-}" ]]; then
-  if [[ -f "$script_dir/../Dockerfile" && -d "$script_dir/../.git" ]]; then
+  if [[ -f "$script_dir/Dockerfile" && -d "$script_dir/.git" ]]; then
+    REPO_DIR=$script_dir
+  elif [[ -f "$script_dir/../Dockerfile" && -d "$script_dir/../.git" ]]; then
     REPO_DIR=$(cd "$script_dir/.." && pwd)
   elif [[ -f "$script_dir/src/Dockerfile" && -d "$script_dir/src/.git" ]]; then
     REPO_DIR=$script_dir/src
