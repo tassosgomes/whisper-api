@@ -67,7 +67,7 @@ A ADR-003 já aceita destinos privados listados, mas o deploy, o contrato públi
 - [x] 7.0 Servir resultado versionado e expurgar dados vencidos
 - [x] 8.0 Entregar webhook terminal assinado e comprovar a jornada
 - [x] 9.0 Configurar a allowlist de destinos privados no deploy
-- [ ] 10.0 Cadastrar o destino do webhook da conta code-for-coders
+- [x] 10.0 Cadastrar o destino do webhook da conta code-for-coders
 - [ ] 11.0 Corrigir o contrato da sourceUrl
 - [ ] 12.0 Pinar dependências transitivas e cobrir a decodificação
 - [ ] 13.0 Atualizar o baseline arquitetural com a exceção da ADR-003

@@ -170,6 +170,8 @@ worker dessa stack, registre:
   do media vêm dessa capacidade; o caminho do receptor é
   `/webhooks/v1/transcription-events`. Lista vazia mantém a recusa de destino
   privado de webhook. A lista de origens não autoriza a de webhooks.
+  O cadastro na conta code-for-coders, quando a CAP-032 existir, segue a ordem
+  em "Operação do piloto", seção 6.
 
 Depois de gravar as variáveis, reinicie a api e o worker. A conferência remota
 — um POST com `sourceUrl` pré-assinada de `http://192.168.0.5:9000` devolvendo
@@ -371,6 +373,36 @@ Independente da API Key, por conta:
    (considerar `Retry-After`). Retentativas de falhas transitórias seguem por
    até 72 h com backoff exponencial e jitter, sem alterar o estado do job.
 
+#### Ordem de cadastro do receptor code-for-coders
+
+A conta code-for-coders já existe e é a dona da API Key em uso. Não rotacione
+essa chave neste cadastro. Um destino por conta. O material de assinatura é
+independente da API Key, aparece uma vez e segue a ADR-002. Destino privado
+só é aceito se estiver em `TRUSTED_PRIVATE_WEBHOOKS` (ADR-003). O caminho do
+receptor é `/webhooks/v1/transcription-events`. Host, porta e URL vêm da
+CAP-032; não os invente e não grave o segredo neste repositório.
+
+Siga esta ordem, e somente depois que o receptor do media estiver implantado
+(CAP-032, fora deste repositório):
+
+1. Receptor implantado (CAP-032), no caminho
+   `/webhooks/v1/transcription-events`.
+2. Allowlist de webhook somente se esse host for privado: na api e no worker
+   no Coolify, inclua o host e a porta vindos da CAP-032 em
+   `TRUSTED_PRIVATE_WEBHOOKS` e reinicie os dois. Se o host for público,
+   deixe a lista vazia. Em produção o media usa AWS S3 público na origem da
+   mídia; isso não dispensa a allowlist se o receptor de webhook for privado.
+   Enquanto host e porta não vierem da CAP-032, `TRUSTED_PRIVATE_WEBHOOKS`
+   permanece vazia (ver "Allowlist da stack remota").
+3. `webhook configure` na conta code-for-coders existente (comando do passo 1
+   acima), com a URL cujo caminho é `/webhooks/v1/transcription-events`.
+4. Entrega do segredo de assinatura ao time do code-for-coders por canal
+   seguro, fora do git. Ele vira configuração do media. O segredo não entra
+   no repositório, neste README, em log nem em task.
+
+Fora deste checkout, a evidência conclusiva é um job de teste que gera a
+entrega assinada e o receptor responde 204.
+
 ### 7. Auditoria mínima
 
 Registre para cada ação (criação, entrega, consulta de metadados, rotação,
@@ -457,7 +489,8 @@ A implementação do consumidor é rastreada no plano, fora do checkout Whisper.
    `TRUSTED_PRIVATE_SOURCES`. No ambiente remoto do code-for-coders o valor é
    `TRUSTED_PRIVATE_SOURCES=http://192.168.0.5:9000`. `TRUSTED_PRIVATE_WEBHOOKS`
    permanece vazia até a CAP-032: host e porta do receptor ainda não existem;
-   o caminho previsto é `/webhooks/v1/transcription-events`. As listas são
+   o caminho previsto é `/webhooks/v1/transcription-events`. O cadastro segue
+   a ordem da seção 6 de Operação do piloto. As listas são
    independentes e nunca liberam loopback, link-local nem multicast (ver
    "Destinos privados confiáveis" e "Allowlist da stack remota" em
    Configuração, e a ADR-003). Com `http`, a URL pré-assinada trafega sem
