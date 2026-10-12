@@ -156,6 +156,25 @@ possível, e reinicie `transcriber` e `worker` após alterar. O CLI
 `webhook configure/set-endpoint` lê `TRUSTED_PRIVATE_WEBHOOKS` do ambiente do
 container.
 
+#### Allowlist da stack remota (Coolify)
+
+O compose do deploy em 192.168.0.11 não está neste repositório. O
+`docker-compose.yml` local só repassa `TRUSTED_PRIVATE_SOURCES` e
+`TRUSTED_PRIVATE_WEBHOOKS` aos serviços `transcriber` e `worker`. Na api e no
+worker dessa stack, registre:
+
+- `TRUSTED_PRIVATE_SOURCES=http://192.168.0.5:9000`, o MinIO do ambiente remoto
+  do code-for-coders. Em produção o media usa AWS S3 público, que não entra
+  na allowlist.
+- `TRUSTED_PRIVATE_WEBHOOKS` vazia até a CAP-032. O host e a porta do receptor
+  do media vêm dessa capacidade; o caminho do receptor é
+  `/webhooks/v1/transcription-events`. Lista vazia mantém a recusa de destino
+  privado de webhook. A lista de origens não autoriza a de webhooks.
+
+Depois de gravar as variáveis, reinicie a api e o worker. A conferência remota
+— um POST com `sourceUrl` pré-assinada de `http://192.168.0.5:9000` devolvendo
+202 e o job chegando a `completed` — não faz parte deste checkout.
+
 Para selecionar outro modelo, confirme que ele foi preparado e ajuste `WHISPER_MODEL_NAME`. O caminho padrão acompanha esse nome. Se definir `WHISPER_MODEL_PATH` manualmente, aponte para o diretório correspondente.
 
 ## Benchmark com a reunião real
@@ -435,12 +454,15 @@ A implementação do consumidor é rastreada no plano, fora do checkout Whisper.
    depois dela, mas uma retomada iniciada depois da expiração falha.
 3. Se o MinIO do consumidor estiver na mesma rede privada do Whisper (IP
    privado, possivelmente HTTP), a URL só é aceita quando o destino estiver em
-   `TRUSTED_PRIVATE_SOURCES`, por exemplo
-   `TRUSTED_PRIVATE_SOURCES=http://minio.rede-interna:9000`. O mesmo vale para o
-   receptor de webhook do consumidor em `TRUSTED_PRIVATE_WEBHOOKS`. As listas
-   são independentes, vazias por padrão e nunca liberam loopback, link-local nem
-   multicast (ver "Destinos privados confiáveis" em Configuração e ADR-003).
-   Com `http`, a URL pré-assinada trafega sem criptografia na rede privada.
+   `TRUSTED_PRIVATE_SOURCES`. No ambiente remoto do code-for-coders o valor é
+   `TRUSTED_PRIVATE_SOURCES=http://192.168.0.5:9000`. `TRUSTED_PRIVATE_WEBHOOKS`
+   permanece vazia até a CAP-032: host e porta do receptor ainda não existem;
+   o caminho previsto é `/webhooks/v1/transcription-events`. As listas são
+   independentes e nunca liberam loopback, link-local nem multicast (ver
+   "Destinos privados confiáveis" e "Allowlist da stack remota" em
+   Configuração, e a ADR-003). Com `http`, a URL pré-assinada trafega sem
+   criptografia na rede privada. Em produção o media usa AWS S3 público, que
+   não entra na allowlist.
 4. Envie somente a URL; nunca envie credenciais do bucket do consumidor. A URL
    não é devolvida em respostas, webhooks, logs, traces, métricas ou erros, e
    é descartada após download bem-sucedido ou esgotamento das tentativas.
