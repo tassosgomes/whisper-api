@@ -229,7 +229,12 @@ class JobWorker:
                 self._finish_failure(
                     job_id, owner, "UNSUPPORTED_MEDIA_FORMAT", "processing"
                 )
-            except _TranscriptionEngineFailure:
+            except _TranscriptionEngineFailure as exc:
+                logger.warning(
+                    "Transcription engine failed job_id=%s error_type=%s",
+                    job_id,
+                    type(exc.__cause__).__name__,
+                )
                 self._delete_object_safely(media_key, job_id)
                 self._finish_failure(
                     job_id, owner, "TRANSCRIPTION_FAILED", "processing"

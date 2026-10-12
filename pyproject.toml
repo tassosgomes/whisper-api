@@ -12,6 +12,8 @@ dependencies = [
     "fastapi==0.115.12",
     "uvicorn[standard]==0.34.0",
     "faster-whisper==1.2.1",
+    # faster-whisper 1.2.1 passa metadata_errors a av.open; PyAV 19 removeu o argumento.
+    "av==18.0.0",
     "ctranslate2==4.8.2",
     "huggingface-hub==0.34.4",
     "psutil==7.0.0",
