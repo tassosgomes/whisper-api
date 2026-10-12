@@ -11,14 +11,14 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md constraints.txt ./
 COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY scripts ./scripts
 
 RUN python -m pip install --upgrade pip==25.1.1 \
-    && python -m pip install .
+    && python -m pip install -c constraints.txt .
 
 EXPOSE 8000
 
