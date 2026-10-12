@@ -1,4 +1,4 @@
-"""SSRF-safe HTTPS connection and streaming download for customer media."""
+"""SSRF-safe HTTP(S) connection and streaming download for customer media."""
 
 from __future__ import annotations
 
@@ -14,9 +14,11 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from app.transcription.paths import (
     InvalidSourceURL,
-    resolve_public_addresses,
+    TrustedDestinations,
+    resolve_destination_addresses,
     validate_source_url_syntax,
 )
+from app.transcription.pinned import open_pinned_connection
 
 
 MAX_MEDIA_SIZE_BYTES = 5 * 1024**3
@@ -80,26 +82,14 @@ def source_url_expiry(source_url: str) -> datetime | None:
     return None
 
 
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS connection pinned to an address that passed the SSRF check."""
-
-    def __init__(self, hostname: str, port: int, address: str):
-        super().__init__(hostname, port, timeout=CONNECT_TIMEOUT_SECONDS)
-        self._approved_address = address
-
-    def connect(self) -> None:
-        sock = socket.create_connection(
-            (self._approved_address, self.port), timeout=self.timeout
-        )
-        try:
-            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-        except Exception:
-            sock.close()
-            raise
-
-
 class SourceConnector:
-    """Validate every redirect and pin each HTTPS request to a public address."""
+    """Validate every redirect and pin each request to an approved address.
+
+    ``trusted`` is the ``TRUSTED_PRIVATE_SOURCES`` allowlist (empty by default).
+    """
+
+    def __init__(self, trusted: TrustedDestinations | None = None) -> None:
+        self.trusted = trusted or TrustedDestinations()
 
     def start(self, source_url: str) -> ConnectionStarted:
         """Open one GET and inspect headers before the API accepts the job."""
@@ -181,16 +171,20 @@ class SourceConnector:
         raise SourceUnavailable
 
     def _open_get(self, source_url: str):
-        parsed, hostname, port = validate_source_url_syntax(source_url)
+        parsed, hostname, port = validate_source_url_syntax(source_url, self.trusted)
         expires_at = source_url_expiry(source_url)
         if expires_at is not None and datetime.now(timezone.utc) >= expires_at:
             raise ExpiredSourceURL
-        addresses = resolve_public_addresses(hostname, port)
+        addresses = resolve_destination_addresses(
+            hostname, port, parsed.scheme, self.trusted
+        )
         family, address = addresses[0]
         if family not in {socket.AF_INET, socket.AF_INET6}:
             raise InvalidSourceURL("URL de origem inválida.")
 
-        connection = _PinnedHTTPSConnection(hostname, port, address)
+        connection = open_pinned_connection(
+            parsed.scheme, hostname, port, address, CONNECT_TIMEOUT_SECONDS
+        )
         try:
             connection.connect()
             if connection.sock is not None:

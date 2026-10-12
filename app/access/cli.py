@@ -14,6 +14,7 @@ from app.jobs.webhooks import (
     WebhookConfigStore,
     WebhookSecretCipher,
 )
+from app.transcription.paths import TrustedDestinations
 
 
 def _credential_id(value: str) -> UUID:
@@ -98,7 +99,9 @@ def main() -> int:
             cipher = WebhookSecretCipher.from_hex(
                 os.getenv("WEBHOOK_SECRET_ENCRYPTION_KEY")
             )
-            store = WebhookConfigStore(engine, cipher)
+            store = WebhookConfigStore(
+                engine, cipher, TrustedDestinations.from_env("TRUSTED_PRIVATE_WEBHOOKS")
+            )
             if args.webhook_action == "configure":
                 secret = store.configure(args.account_id, args.url)
                 result = {"accountId": str(args.account_id), "webhookSecret": secret}

@@ -126,6 +126,35 @@ As variáveis do Compose podem ser definidas em `.env` ou no ambiente do comando
 | `POSTGRES_PASSWORD` | valor local de exemplo | Senha local PostgreSQL; substitua antes de qualquer implantação compartilhada |
 | `TEST_POSTGRES_DB`, `TEST_POSTGRES_USER`, `TEST_POSTGRES_PASSWORD` | valores locais de exemplo | Credenciais do banco de integração isolado |
 | `TEST_POSTGRES_PORT` | `55432` | Porta local do banco de integração isolado |
+| `TRUSTED_PRIVATE_SOURCES` | vazio | Allowlist de destinos privados aceitos como `sourceUrl` (e seus redirecionamentos); ver abaixo |
+| `TRUSTED_PRIVATE_WEBHOOKS` | vazio | Allowlist, independente da anterior, de destinos privados aceitos como URL de webhook; ver abaixo |
+
+#### Destinos privados confiáveis (ADR-003)
+
+Por padrão a API só baixa `sourceUrl` e só entrega webhooks por HTTPS para hosts
+que resolvam exclusivamente a endereços públicos. `TRUSTED_PRIVATE_SOURCES` e
+`TRUSTED_PRIVATE_WEBHOOKS` abrem exceções explícitas e separadas. Cada uma é uma
+lista separada por vírgula de entradas:
+
+| Entrada | Significado |
+|---|---|
+| `host[:porta]` | Hostname e porta exatos, somente HTTPS. Sem porta: 443. |
+| `http://host[:porta]` | Idem, mas para URLs `http`. Sem porta: 80. |
+| `CIDR` / `http://CIDR` | Aceita se todos os IPs resolvidos caírem no intervalo (qualquer porta), em HTTPS / em HTTP. |
+
+Exemplo: `TRUSTED_PRIVATE_SOURCES=http://minio.rede-interna:9000` e
+`TRUSTED_PRIVATE_WEBHOOKS=https://api-consumidor.rede-interna:8443,10.20.0.0/24`
+(o prefixo `https://` é aceito e opcional).
+
+`http` só é permitido para entradas marcadas com `http://`; uma entrada sem
+marcação nunca autoriza `http`. Loopback, link-local (169.254.0.0/16, incluindo
+metadados de nuvem, e fe80::/10), multicast e `0.0.0.0` são recusados mesmo
+se listados. Redirecionamentos do download são validados a cada salto com a
+mesma lista; webhooks continuam sem seguir redirecionamentos. Entrada
+malformada impede a inicialização. Prefira `host:porta` ou o menor CIDR
+possível, e reinicie `transcriber` e `worker` após alterar. O CLI
+`webhook configure/set-endpoint` lê `TRUSTED_PRIVATE_WEBHOOKS` do ambiente do
+container.
 
 Para selecionar outro modelo, confirme que ele foi preparado e ajuste `WHISPER_MODEL_NAME`. O caminho padrão acompanha esse nome. Se definir `WHISPER_MODEL_PATH` manualmente, aponte para o diretório correspondente.
 
@@ -277,8 +306,9 @@ Independente da API Key, por conta:
      --account-id <account-id> --url https://novo-cliente.example/webhooks/transcription
    ```
 
-   `configure` e `set-endpoint` aceitam somente HTTPS e rejeitam nomes que
-   resolvam para loopback, redes privadas, link-local ou metadados. A entrega
+   `configure` e `set-endpoint` aceitam somente HTTPS (ou HTTP marcado em
+   `TRUSTED_PRIVATE_WEBHOOKS`) e rejeitam nomes que resolvam para loopback,
+   redes privadas não listadas, link-local ou metadados. A entrega
    repete a validação e fixa a conexão ao endereço público aprovado.
 
 2. Cadastre um destino HTTPS por conta (URL do callback vem da configuração
@@ -403,7 +433,15 @@ A implementação do consumidor é rastreada no plano, fora do checkout Whisper.
    suficiente das credenciais temporárias que a assinam. O S3 verifica a
    expiração no início de cada request: um download já iniciado pode terminar
    depois dela, mas uma retomada iniciada depois da expiração falha.
-3. Envie somente a URL; nunca envie credenciais do bucket do consumidor. A URL
+3. Se o MinIO do consumidor estiver na mesma rede privada do Whisper (IP
+   privado, possivelmente HTTP), a URL só é aceita quando o destino estiver em
+   `TRUSTED_PRIVATE_SOURCES`, por exemplo
+   `TRUSTED_PRIVATE_SOURCES=http://minio.rede-interna:9000`. O mesmo vale para o
+   receptor de webhook do consumidor em `TRUSTED_PRIVATE_WEBHOOKS`. As listas
+   são independentes, vazias por padrão e nunca liberam loopback, link-local nem
+   multicast (ver "Destinos privados confiáveis" em Configuração e ADR-003).
+   Com `http`, a URL pré-assinada trafega sem criptografia na rede privada.
+4. Envie somente a URL; nunca envie credenciais do bucket do consumidor. A URL
    não é devolvida em respostas, webhooks, logs, traces, métricas ou erros, e
    é descartada após download bem-sucedido ou esgotamento das tentativas.
 
