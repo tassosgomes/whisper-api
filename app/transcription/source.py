@@ -26,6 +26,7 @@ CONNECT_TIMEOUT_SECONDS = 10
 READ_TIMEOUT_SECONDS = 60
 MAX_REDIRECTS = 5
 TRANSIENT_HTTP_STATUSES = frozenset({408, 429, *range(500, 600)})
+SOURCE_USER_AGENT = "Whisper/0.1.0 (transcription source downloader)"
 
 
 class MediaSizeExceeded(ValueError):
@@ -195,7 +196,11 @@ class SourceConnector:
             connection.request(
                 "GET",
                 request_target,
-                headers={"Accept": "*/*", "Connection": "close"},
+                headers={
+                    "Accept": "*/*",
+                    "Connection": "close",
+                    "User-Agent": SOURCE_USER_AGENT,
+                },
             )
             return connection, connection.getresponse()
         except (InvalidSourceURL, MediaSizeExceeded, SourceUnavailable):

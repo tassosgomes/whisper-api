@@ -136,6 +136,7 @@ class ControlledOrigin:
     body: bytes = b"controlled test media"
     omit_content_length: bool = False
     response_delay_seconds: float = 0.0
+    user_agents: list[str | None] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     active_requests: int = 0
     max_concurrent_requests: int = 0
@@ -170,6 +171,7 @@ def controlled_https_origin(
             with state.lock:
                 request_index = state.request_count
                 state.request_count += 1
+                state.user_agents.append(self.headers.get("User-Agent"))
                 state.active_requests += 1
                 state.max_concurrent_requests = max(
                     state.max_concurrent_requests, state.active_requests

@@ -71,7 +71,7 @@ A ADR-003 já aceita destinos privados listados, mas o deploy, o contrato públi
 - [x] 11.0 Corrigir o contrato da sourceUrl
 - [x] 12.0 Pinar dependências transitivas e cobrir a decodificação
 - [x] 13.0 Atualizar o baseline arquitetural com a exceção da ADR-003
-- [ ] 14.0 Enviar User-Agent identificável no download (opcional)
+- [x] 14.0 Enviar User-Agent identificável no download (opcional)
 - [ ] 15.0 Calar o aviso de alias do Pydantic na criação (opcional)
 
 ## Verificação herdada
