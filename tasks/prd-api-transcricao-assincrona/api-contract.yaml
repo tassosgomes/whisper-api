@@ -481,11 +481,14 @@ components:
         sourceUrl:
           type: string
           format: uri
-          pattern: '^https://'
+          pattern: '^(?:https://|http://)'
           description: >-
-            URL HTTPS GET pré-assinada de leitura gerada pelo consumidor para
-            seu objeto privado. Validade efetiva mínima de 60 min desde a
-            emissão. A URL não deve ser registrada em logs.
+            URL GET pré-assinada de leitura gerada pelo consumidor para seu
+            objeto privado. Endereço público exige HTTPS. http:// só é aceito
+            para destino da allowlist de origens privadas (ADR-003); fora dela
+            o contrato continua exigindo HTTPS, inclusive para host público.
+            Validade efetiva mínima de 60 min desde a emissão. A URL não deve
+            ser registrada em logs.
           examples:
             - https://media.example.test/signed/arquivo.mp4?sig=not-a-real-signature
         clientReference:

@@ -2,8 +2,8 @@
 
 > **TechSpec de origem:** [techspec.md](techspec.md), aprovada em 2026-09-28  
 > **Escopo:** Backend  
-> **ADRs pertinentes:** [ADR-001](../../docs/adr/adr-001.md), [ADR-002](../../docs/adr/adr-002.md)  
-> **Status do plano:** Aprovado em 2026-09-28
+> **ADRs pertinentes:** [ADR-001](../../docs/adr/adr-001.md), [ADR-002](../../docs/adr/adr-002.md), [ADR-003](../../docs/adr/adr-003.md)  
+> **Status do plano:** Tasks 1.0 a 8.0 aprovadas em 2026-09-28. Tasks 9.0 a 15.0 acrescentadas em 2026-10-12 e ainda pendentes.
 
 ## Visão Geral
 
@@ -23,6 +23,10 @@ V-02 prova 202 após o início da conexão com a origem, idempotência e recuper
 
 V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso assinado, retries independentes do estado do job e smoke de criação até busca do resultado pelo destino de consulta público. Checkpoints: gates de 7.0 e 8.0.
 
+### Fase 4 — Integração remota e correções posteriores
+
+A ADR-003 já aceita destinos privados listados, mas o deploy, o contrato público e o baseline ainda descrevem a regra antiga. 9.0 liga a allowlist do MinIO no Coolify. 10.0 cadastra o webhook da conta code-for-coders quando o receptor do media existir. 11.0 alinha o contrato da `sourceUrl`. 12.0 trava as dependências transitivas e cobre a decodificação. 13.0 registra a exceção no baseline. 14.0 e 15.0 são opcionais e não bloqueiam as anteriores.
+
 ## Mapa de Entrega
 
 | Fatia | Task | Comportamento observável | Gate | Bloqueado por |
@@ -32,6 +36,13 @@ V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso a
 | V-03 | 6.0 | Mídia atravessa download, fila, processamento e terminal com limites e retomada | `rtk pytest -q -k v03_processing` | 5.0 |
 | V-04 | 7.0 | Resultado v1 fica acessível apenas ao dono e expira após 24 horas com expurgo | `rtk pytest -q -k v04_result` | 6.0 |
 | V-05 | 8.0 | Webhook verificável e repetível preserva o job; smoke alcança resultado pelo link público | `rtk pytest -q -k v05_webhook` | 2.0, 6.0, 7.0 |
+| EN-04 | 9.0 | API e worker no Coolify aceitam `sourceUrl` do MinIO privado e um job de prova chega a completed | `rtk rg -q 'TRUSTED_PRIVATE_SOURCES=http://192.168.0.5:9000' README.md` | Nenhum |
+| EN-05 | 10.0 | Conta code-for-coders tem destino de webhook e um job de prova recebe 204 do receptor | `rtk rg -q '/webhooks/v1/transcription-events' README.md` | 9.0; CAP-032 fora deste repositório |
+| EN-06 | 11.0 | Contrato da `sourceUrl` descreve http na allowlist e o lint Spectral passa | `rtk rg -q 'ADR-003' tasks/prd-api-transcricao-assincrona/api-contract.yaml` | Nenhum |
+| V-06 | 12.0 | Build instala transitivas pinadas e uma mídia mínima decodifica com `decode_audio` | `rtk pytest -q -k decode_audio_fixture` | Nenhum |
+| EN-07 | 13.0 | Baseline admite destino privado só quando está na allowlist da ADR-003 | `rtk rg -q 'ADR-003' context/architecture-baseline.md` | Nenhum |
+| V-07 | 14.0 | Downloader envia User-Agent identificável; S3 e MinIO seguem iguais | `rtk pytest -q -k downloader_user_agent` | Nenhum |
+| V-08 | 15.0 | `sourceUrl` e `clientReference` deixam de emitir o aviso do Pydantic e o JSON aceito permanece | `rtk pytest -q -k request_alias_warning` | Nenhum |
 
 ### Habilitadores
 
@@ -40,6 +51,10 @@ V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso a
 | EN-03 | 1.0 | OpenAPI e índice são acordo compartilhado por todas as operações, sem comportamento executável do serviço | V-01 a V-05 |
 | EN-02 | 2.0 | Procedimento manual de operação atende credenciais e webhook sem API administrativa no piloto | V-01 e V-05 |
 | EN-01 | 3.0 | Acordo de integração do consumidor cruza criação, consulta e webhook e requer trabalho externo no code-for-coders | V-02 e piloto integrado |
+| EN-04 | 9.0 | A stack Coolify não está no repositório; a allowlist é configuração dos processos já implantados | smoke remoto do MinIO e 10.0 |
+| EN-05 | 10.0 | O cadastro usa a conta e a CLI já existentes; o receptor é da CAP-032, fora deste repositório | entrega real ao media |
+| EN-06 | 11.0 | O schema público é compartilhado por todo cliente da `sourceUrl`; a exceção não pode ficar só no código | leitura do contrato |
+| EN-07 | 13.0 | O baseline é guardrail de todas as features; não há comportamento novo de runtime nesta task | leitura do baseline por CAP-002 e pelo contrato |
 
 ## Tasks
 
@@ -51,6 +66,13 @@ V-04 prova resultado v1, autorização, retenção e expurgo. V-05 prova aviso a
 - [x] 6.0 Baixar, validar e transcrever mídia com estado recuperável
 - [x] 7.0 Servir resultado versionado e expurgar dados vencidos
 - [x] 8.0 Entregar webhook terminal assinado e comprovar a jornada
+- [x] 9.0 Configurar a allowlist de destinos privados no deploy
+- [x] 10.0 Cadastrar o destino do webhook da conta code-for-coders
+- [x] 11.0 Corrigir o contrato da sourceUrl
+- [x] 12.0 Pinar dependências transitivas e cobrir a decodificação
+- [x] 13.0 Atualizar o baseline arquitetural com a exceção da ADR-003
+- [x] 14.0 Enviar User-Agent identificável no download (opcional)
+- [x] 15.0 Calar o aviso de alias do Pydantic na criação (opcional)
 
 ## Verificação herdada
 
@@ -72,16 +94,18 @@ As histórias do PRD não têm IDs no texto; US-01 a US-04 seguem a ordem em **H
 | Requisito | Task(s) |
 |---|---|
 | RF-01 | 1.0, 2.0, 4.0 |
-| RF-02 | 1.0, 3.0, 5.0, 6.0 |
-| RF-03 | 5.0, 6.0 |
-| RF-04 | 1.0, 2.0, 3.0, 8.0 |
+| RF-02 | 1.0, 3.0, 5.0, 6.0, 9.0, 11.0, 15.0 |
+| RF-03 | 5.0, 6.0, 12.0, 14.0 |
+| RF-04 | 1.0, 2.0, 3.0, 8.0, 10.0 |
 | RF-05 | 1.0, 3.0, 7.0 |
 | RF-06 | 6.0, 7.0 |
 | US-01 | 3.0, 5.0, 6.0 |
 | US-02 | 6.0, 8.0 |
 | US-03 | 7.0 |
-| US-04 | 2.0, 4.0 |
+| US-04 | 2.0, 4.0, 10.0 |
 
 Todos os arquivos da seção **A modificar** da TechSpec têm task produtora: `app/api/transcriptions.py` (4.0, 5.0, 7.0), `app/jobs/executor.py` (4.0 a 8.0), `app/main.py` (4.0 a 8.0), `app/service.py` (6.0, 7.0), `app/transcription/paths.py` (5.0, 6.0), `app/monitoring/metrics.py` (5.0, 6.0, 8.0), `docker-compose.yml` (5.0 a 8.0), `.env.example` (6.0, 7.0). EN-03 também altera os três documentos de contrato existentes. Segurança atravessa 4.0 a 8.0; observabilidade atravessa 5.0, 6.0 e 8.0. Não há migração de dados legados: a PoC não tem estado durável a migrar.
 
 Sequência crítica: 1.0 → 4.0 → 5.0 → 6.0 → 7.0 → 8.0. 2.0 antecede 4.0; 3.0 antecede 5.0. Cada gate roda após a respectiva task e a validação full usa os checks agregados acima. O piloto integrado ainda depende da implementação da URL GET pré-assinada no code-for-coders e da medição de capacidade.
+
+13.0 não cobre um RF novo: alinha o guardrail de segurança do baseline à ADR-003 já aceita. 14.0 e 15.0 são optativas. 9.0 e 10.0 têm evidência conclusiva fora do repositório (POST no Coolify e resposta 204 do receptor); o gate no plano só fixa o runbook que torna essa evidência rastreável.
