@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StringConstraints
@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.access.credentials import (
     AccountNameRequired,
     CredentialNotFound,
+    CredentialRevoked,
     CredentialStore,
 )
 from app.api.transcriptions import router
@@ -396,6 +397,69 @@ def get_credential(credentialId: UUID, request: Request, response: Response) -> 
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"detail": "O recurso não está disponível."},
         ) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return credential
+
+
+@app.post("/v1/credentials/{credentialId}/rotate", operation_id="rotateCredential")
+def rotate_credential(credentialId: UUID, request: Request, response: Response) -> dict:
+    try:
+        credential, api_key = request.app.state.credential_store.rotate(
+            credentialId, audit=True
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except CredentialRevoked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "title": "Credencial revogada",
+                "code": "CREDENTIAL_REVOKED",
+                "detail": "Uma credencial revogada não é rotacionada.",
+            },
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return {**credential, "apiKey": api_key}
+
+
+class ReasonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Annotated[str, StringConstraints(strip_whitespace=True)] | None = None
+
+
+@app.post("/v1/credentials/{credentialId}/revoke", operation_id="revokeCredential")
+def revoke_credential(
+    credentialId: UUID,
+    request: Request,
+    response: Response,
+    payload: ReasonRequest | None = Body(None),
+) -> dict:
+    if payload is None or not payload.reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Motivo obrigatório",
+                "code": "REASON_REQUIRED",
+                "detail": "Informe o motivo antes de confirmar.",
+            },
+        )
+    try:
+        credential = request.app.state.credential_store.revoke(
+            credentialId, reason=payload.reason, audit=True
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
     response.headers["Cache-Control"] = "no-store"
     return credential
 

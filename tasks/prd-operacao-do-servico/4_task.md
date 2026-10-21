@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [3.0]
 gate: ".venv/bin/pytest -q -k v04_operator_credential_lifecycle"
@@ -46,8 +46,8 @@ Rotação e revogação seguem as regras atuais de `CredentialStore`; o motivo e
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v04_operator_credential_lifecycle`
-- [ ] Rotação conserva o id, invalida a chave antiga, mantém os jobs legíveis com a nova e não altera o material de webhook.
-- [ ] Revogação sem motivo responde `422` e a chave continua válida.
-- [ ] Revogação com motivo recusa a chave sem revelar job e grava o motivo na trilha no mesmo commit.
-- [ ] Rotação de credencial revogada responde `409 CREDENTIAL_REVOKED`.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v04_operator_credential_lifecycle`
+- [x] Rotação conserva o id, invalida a chave antiga, mantém os jobs legíveis com a nova e não altera o material de webhook.
+- [x] Revogação sem motivo responde `422` e a chave continua válida.
+- [x] Revogação com motivo recusa a chave sem revelar job e grava o motivo na trilha no mesmo commit.
+- [x] Rotação de credencial revogada responde `409 CREDENTIAL_REVOKED`.

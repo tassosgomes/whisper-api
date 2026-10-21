@@ -206,6 +206,15 @@ _CONSOLE_PAGE = """<!doctype html>
         <button id="credentials-next" type="button" disabled>Próxima</button>
       </nav>
       <pre id="credential-detail"></pre>
+      <button id="credential-rotate" type="button" disabled>Rotacionar API Key</button>
+      <button id="credential-revoke" type="button" disabled>Revogar API Key</button>
+      <form id="credential-revoke-form" hidden>
+        <label for="credential-revoke-reason">Motivo da revogação</label>
+        <input id="credential-revoke-reason" name="reason" required autocomplete="off">
+        <p>A revogação é imediata e impede novas chamadas com esta chave.</p>
+        <button id="credential-revoke-confirm" type="submit">Confirmar revogação</button>
+        <button id="credential-revoke-cancel" type="button">Cancelar</button>
+      </form>
     </section>
     <section aria-labelledby="destinations-heading"><h2 id="destinations-heading">Destinos de webhook</h2></section>
     <section aria-labelledby="queue-heading"><h2 id="queue-heading">Fila e jobs</h2></section>
@@ -302,7 +311,13 @@ _CONSOLE_PAGE = """<!doctype html>
     const credentialDetail = document.getElementById("credential-detail");
     const credentialPrevious = document.getElementById("credentials-previous");
     const credentialNext = document.getElementById("credentials-next");
+    const credentialRotate = document.getElementById("credential-rotate");
+    const credentialRevoke = document.getElementById("credential-revoke");
+    const credentialRevokeForm = document.getElementById("credential-revoke-form");
+    const credentialRevokeConfirm = document.getElementById("credential-revoke-confirm");
     let selectedAccountId = null;
+    let selectedCredential = null;
+    let credentialMutationPending = false;
     let credentialPage = 1;
     let credentialView = 0;
 
@@ -318,13 +333,40 @@ _CONSOLE_PAGE = """<!doctype html>
       credentialError.hidden = false;
     }
 
+    function updateCredentialActions() {
+      const disabled = credentialMutationPending || selectedCredential?.status !== "active";
+      credentialRotate.disabled = disabled;
+      credentialRevoke.disabled = disabled;
+      credentialRevokeConfirm.disabled = disabled;
+      credentialIssue.disabled = credentialMutationPending || selectedAccountId === null;
+    }
+
+    function resetCredentialDetail() {
+      selectedCredential = null;
+      credentialDetail.textContent = "";
+      credentialRevokeForm.hidden = true;
+      credentialRevokeForm.reset();
+      updateCredentialActions();
+    }
+
+    function showCredentialDetail(metadata) {
+      selectedCredential = metadata;
+      credentialDetail.textContent = JSON.stringify(metadata, null, 2);
+      updateCredentialActions();
+    }
+
     async function credentialRequest(path, options) {
       const response = await fetch(path, { cache: "no-store", ...options });
       if (response.status === 401) {
         clearCredentialSecret();
         window.location.reload();
       }
-      if (!response.ok) throw new Error("Não foi possível concluir a operação de credenciais. Consulte a lista antes de tentar novamente.");
+      if (!response.ok) {
+        const problem = await response.json();
+        if (problem.code === "REASON_REQUIRED") throw new Error("Informe o motivo antes de confirmar.");
+        if (problem.code === "CREDENTIAL_REVOKED") throw new Error("Uma credencial revogada não é rotacionada.");
+        throw new Error("Não foi possível concluir a operação de credenciais. Consulte a lista antes de tentar novamente.");
+      }
       return response.json();
     }
 
@@ -336,7 +378,7 @@ _CONSOLE_PAGE = """<!doctype html>
       credentialPrevious.disabled = true;
       credentialNext.disabled = true;
       credentialError.hidden = true;
-      credentialDetail.textContent = "";
+      resetCredentialDetail();
       document.getElementById("credential-account").textContent = "Carregando conta…";
       document.getElementById("credential-list").replaceChildren();
       document.getElementById("credentials-pagination").textContent = "";
@@ -344,7 +386,7 @@ _CONSOLE_PAGE = """<!doctype html>
       if (view !== credentialView) return;
       selectedAccountId = account.accountId;
       document.getElementById("credential-account").textContent = `${account.name} (${account.accountId})`;
-      credentialIssue.disabled = false;
+      updateCredentialActions();
       await loadCredentials();
     }
 
@@ -362,11 +404,11 @@ _CONSOLE_PAGE = """<!doctype html>
         open.textContent = `${credential.credentialId} (${credential.status})`;
         open.addEventListener("click", async () => {
           clearCredentialSecret();
-          credentialDetail.textContent = "";
+          resetCredentialDetail();
           const view = credentialView;
           try {
             const detail = await credentialRequest(`/v1/credentials/${credential.credentialId}`);
-            if (view === credentialView) credentialDetail.textContent = JSON.stringify(detail, null, 2);
+            if (view === credentialView) showCredentialDetail(detail);
           } catch (error) {
             showCredentialError(error.message);
           }
@@ -383,26 +425,80 @@ _CONSOLE_PAGE = """<!doctype html>
     }
 
     credentialIssue.addEventListener("click", async () => {
+      if (credentialMutationPending) return;
       clearCredentialSecret();
       const view = credentialView;
       const accountId = selectedAccountId;
       if (!accountId) return;
       credentialError.hidden = true;
+      resetCredentialDetail();
       credentialIssue.disabled = true;
-      credentialDetail.textContent = "";
       try {
         const issued = await credentialRequest(`/v1/accounts/${accountId}/credentials`, { method: "POST" });
         if (view !== credentialView) return;
         document.getElementById("credential-api-key").value = issued.apiKey;
         document.getElementById("credential-secret").hidden = false;
         const { apiKey, ...metadata } = issued;
-        credentialDetail.textContent = JSON.stringify(metadata, null, 2);
+        showCredentialDetail(metadata);
         await loadCredentials();
       } catch (error) {
         showCredentialError(error.message);
       } finally {
         credentialIssue.disabled = selectedAccountId === null;
       }
+    });
+    async function mutateCredential(action, reason) {
+      if (credentialMutationPending || selectedCredential?.status !== "active") return;
+      const credentialId = selectedCredential.credentialId;
+      clearCredentialSecret();
+      const view = credentialView;
+      credentialMutationPending = true;
+      credentialError.hidden = true;
+      updateCredentialActions();
+      try {
+        const result = await credentialRequest(`/v1/credentials/${credentialId}/${action}`, {
+          method: "POST",
+          ...(action === "revoke" ? {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason }),
+          } : {}),
+        });
+        if (view !== credentialView) return;
+        const { apiKey, ...metadata } = result;
+        showCredentialDetail(metadata);
+        credentialRevokeForm.hidden = true;
+        credentialRevokeForm.reset();
+        if (action === "rotate") {
+          document.getElementById("credential-api-key").value = apiKey;
+          document.getElementById("credential-secret").hidden = false;
+        }
+        await loadCredentials(credentialPage);
+      } catch (error) {
+        if (view === credentialView) showCredentialError(error.message);
+      } finally {
+        credentialMutationPending = false;
+        updateCredentialActions();
+      }
+    }
+    credentialRotate.addEventListener("click", () => mutateCredential("rotate"));
+    credentialRevoke.addEventListener("click", () => {
+      clearCredentialSecret();
+      credentialError.hidden = true;
+      credentialRevokeForm.hidden = false;
+      document.getElementById("credential-revoke-reason").focus();
+    });
+    credentialRevokeForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const reason = credentialRevokeForm.elements.reason.value.trim();
+      if (!reason) {
+        showCredentialError("Informe o motivo antes de confirmar.");
+        return;
+      }
+      mutateCredential("revoke", reason);
+    });
+    document.getElementById("credential-revoke-cancel").addEventListener("click", () => {
+      credentialRevokeForm.hidden = true;
+      credentialRevokeForm.reset();
     });
     document.getElementById("credential-copy").addEventListener("click", async () => {
       const view = credentialView;
@@ -417,10 +513,12 @@ _CONSOLE_PAGE = """<!doctype html>
     window.addEventListener("pagehide", clearCredentialSecret);
     credentialPrevious.addEventListener("click", () => {
       clearCredentialSecret();
+      resetCredentialDetail();
       loadCredentials(credentialPage - 1).catch((error) => showCredentialError(error.message));
     });
     credentialNext.addEventListener("click", () => {
       clearCredentialSecret();
+      resetCredentialDetail();
       loadCredentials(credentialPage + 1).catch((error) => showCredentialError(error.message));
     });
     loadAccounts().catch((error) => showAccountError(error.message));

@@ -28,6 +28,14 @@ class AccountNameRequired(ValueError):
     """An account must have a nonblank name."""
 
 
+class CredentialRevoked(ValueError):
+    """A revoked credential cannot be rotated or reactivated."""
+
+
+class ReasonRequired(ValueError):
+    """An audited revocation requires a nonblank reason."""
+
+
 @dataclass(frozen=True)
 class AuthenticatedCredential:
     account_id: UUID
@@ -188,7 +196,7 @@ class CredentialStore:
                 },
             }
 
-    def rotate(self, credential_id: UUID) -> tuple[dict, str]:
+    def rotate(self, credential_id: UUID, *, audit: bool = False) -> tuple[dict, str]:
         api_key = self._new_key(credential_id)
         with self._sessions.begin() as session:
             credential = session.execute(
@@ -198,14 +206,31 @@ class CredentialStore:
             ).scalar_one_or_none()
             if credential is None:
                 raise CredentialNotFound("Credencial não encontrada.")
+            if credential.revoked_at is not None:
+                raise CredentialRevoked("Uma credencial revogada não é rotacionada.")
             account = session.get(Account, credential.account_id)
             credential.key_hash = self._key_hash(api_key)
             credential.rotated_at = datetime.now(timezone.utc)
-            credential.revoked_at = None
             session.flush()
+            if audit:
+                session.add(
+                    AdministrativeAudit(
+                        actor="operational_credential",
+                        account_id=credential.account_id,
+                        action="credential_rotated",
+                        object_type="credential",
+                        object_id=str(credential_id),
+                    )
+                )
+                session.flush()
             return self._metadata(account, credential), api_key
 
-    def revoke(self, credential_id: UUID) -> dict:
+    def revoke(
+        self, credential_id: UUID, *, reason: str | None = None, audit: bool = False
+    ) -> dict:
+        reason = reason.strip() if reason is not None else None
+        if audit and not reason:
+            raise ReasonRequired("Informe o motivo antes de confirmar.")
         with self._sessions.begin() as session:
             credential = session.execute(
                 select(Credential)
@@ -218,6 +243,18 @@ class CredentialStore:
             if credential.revoked_at is None:
                 credential.revoked_at = datetime.now(timezone.utc)
             session.flush()
+            if audit:
+                session.add(
+                    AdministrativeAudit(
+                        actor="operational_credential",
+                        account_id=credential.account_id,
+                        action="credential_revoked",
+                        object_type="credential",
+                        object_id=str(credential_id),
+                        reason=reason,
+                    )
+                )
+                session.flush()
             return self._metadata(account, credential)
 
     def metadata(self, credential_id: UUID) -> dict:
