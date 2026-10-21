@@ -1,0 +1,2 @@
+# O .editorconfig exige LF; impede que checkouts no Windows (core.autocrlf=true) quebrem o dotnet format.
+* text=auto eol=lf

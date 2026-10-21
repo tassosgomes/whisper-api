@@ -466,7 +466,14 @@ internal sealed class RecordingRig : IAsyncDisposable
     public short[] ReadSamples() => ReadSamples(AudioPath);
     public static short[] ReadSamples(string path)
     {
-        var bytes = File.ReadAllBytes(path);
+        // ReadWrite: no Windows, a gravação ativa mantém o arquivo aberto para escrita.
+        byte[] bytes;
+        using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var copy = new MemoryStream())
+        {
+            file.CopyTo(copy);
+            bytes = copy.ToArray();
+        }
         Assert.Equal(bytes.Length - 8, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(4)));
         Assert.Equal(bytes.Length - 44, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(40)));
         Assert.Equal(0, (bytes.Length - 44) % 2);
