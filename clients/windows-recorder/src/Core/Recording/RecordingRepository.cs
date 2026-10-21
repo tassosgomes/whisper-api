@@ -72,7 +72,7 @@ public sealed class RecordingRepository
         return List();
     }
 
-    public IReadOnlyList<RecordingMetadata> List() => Directory.EnumerateDirectories(RootDirectory)
+    public IReadOnlyList<RecordingMetadata> List() => !Directory.Exists(RootDirectory) ? [] : Directory.EnumerateDirectories(RootDirectory)
         .Select(d => Path.Combine(d, "metadata.json"))
         .Where(File.Exists)
         .Select(p => JsonSerializer.Deserialize<RecordingMetadata>(File.ReadAllText(p), JsonOptions)!)

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [5.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V09*" --minimum-expected-tests 8"
@@ -39,6 +39,6 @@ Apagar é definitivo e local (RN-G05). Nunca chama o serviço.
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V09*" --minimum-expected-tests 8`
-- [ ] Apagar com envio em andamento exige a confirmação e não gera requisição; apagar tudo deixa o diretório vazio e remove a chave do dublê do cofre.
-- [ ] Renomear persiste e o título padrão aparece quando não há título.
+- [x] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V09*" --minimum-expected-tests 8`
+- [x] Apagar com envio em andamento exige a confirmação e não gera requisição; apagar tudo deixa o diretório vazio e remove a chave do dublê do cofre.
+- [x] Renomear persiste e o título padrão aparece quando não há título.

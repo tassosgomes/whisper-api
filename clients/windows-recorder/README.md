@@ -402,3 +402,43 @@ dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "
 
 Os testes V-08 usam apenas arquivos locais temporários no formato de V-07;
 não fazem requisições de rede e não precisam de API, PostgreSQL ou MinIO.
+
+## Gestão e remoção de dados locais (V-09)
+
+O host cria `RecordingManagement` com a mesma instância de `RecordingRepository`
+usada pelo envio/acompanhamento, a porta `ICredentialVault` e o diretório de
+dados do app (`%LOCALAPPDATA%\Whisper\Recorder`). Esse diretório deve conter
+as gravações, `settings.json` e os diagnósticos. `RenameAsync(id, title)` persiste
+o título; vazio, espaços ou `null` restauram o padrão de data e hora de criação.
+A lista e os diálogos devem usar `RecordingMetadata.DisplayTitle`.
+
+`RecordingManagementViewModel.RequestDelete(id)` expõe `DeleteConfirmation`
+e o aviso de remoção definitiva. Após o aceite, o host chama
+`ConfirmDeleteAsync`; se `HasPendingTranscription`, precisa apresentar também
+o aviso específico de envio/transcrição em andamento e passar
+`pendingTranscriptionConfirmed: true` somente após esse aceite. A condição é
+reavaliada ao apagar, inclusive quando um envio começa depois de abrir o diálogo.
+`CancelConfirmation` descarta a intenção sem modificar arquivos.
+
+`RequestDeleteAll` apresenta o aviso de apagar todas as gravações, transcrições,
+configurações e a chave de acesso. `ConfirmDeleteAllAsync` remove a chave pela
+porta do cofre e esvazia o diretório do app, incluindo subdiretórios e temporários.
+Falha do cofre mantém os arquivos; falhas posteriores de disco podem deixar
+uma remoção parcial e retornam `StorageError`, com mensagem fixa. A raiz do app
+é preservada vazia; listar/pollar continua válido e o repositório pode ser usado
+novamente. O host deve atualizar a lista e o estado de configuração após sucesso.
+
+As operações aguardam envios/consultas em curso usando a exclusão mútua do
+repositório. Não cancelam jobs nem chamam HTTP; gravações apagadas deixam de
+ser acompanhadas. Uma captura ativa deve ser parada antes dessas operações
+(`RecordingInProgress`). O host deve impedir novas capturas/configurações
+durante a limpeza e liberar arquivos de diagnóstico/player que mantenha abertos.
+Player, lista e diálogos Windows pertencem à task 16.0.
+
+```bash
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V09*" --minimum-expected-tests 8
+```
+
+V-09 usa arquivos temporários, dublê do cofre e interceptação HTTP. Cobre
+confirmações, títulos, remoção completa e seletiva, falha do cofre e limpeza
+enquanto uma consulta de job aguarda resposta, sem recriar dados depois.

@@ -26,7 +26,12 @@ public sealed record RecordingMetadata(
     string? FailureCode = null,
     TrackingProblem TrackingProblem = TrackingProblem.None,
     DateTimeOffset? NextPollAt = null,
-    int PollDelaySeconds = 0);
+    int PollDelaySeconds = 0)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string DisplayTitle => string.IsNullOrWhiteSpace(Title)
+        ? CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") : Title;
+}
 
 public interface IDiskSpace
 {

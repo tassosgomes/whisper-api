@@ -22,7 +22,7 @@ public sealed class UploadCoordinator(RecordingRepository recordings, ApiConfigu
     public UploadConfirmation Prepare(Guid id)
     {
         var recording = recordings.Read(id);
-        return new(id, recording.Title, recording.Duration, new FileInfo(recordings.AudioPath(id)).Length,
+        return new(id, recording.DisplayTitle, recording.Duration, new FileInfo(recordings.AudioPath(id)).Length,
             recording.State == RecordingState.Transcribed);
     }
 
