@@ -27,7 +27,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.access.models import Account
+from app.access.models import Account, AdministrativeAudit
 from app.jobs.models import NotificationEvent, WebhookSecret
 from app.monitoring.metrics import JobProcessingMetrics
 from app.transcription.paths import (
@@ -51,6 +51,18 @@ WEBHOOK_RETRY_ADVISORY_LOCK = 4_377_739_212_784
 
 class WebhookConfigurationError(ValueError):
     """An operator supplied invalid webhook configuration or key material."""
+
+
+class WebhookAccountNotFound(WebhookConfigurationError):
+    """The account for an endpoint does not exist."""
+
+
+class WebhookDestinationNotFound(LookupError):
+    """The account has no webhook destination."""
+
+
+class WebhookDestinationRejected(WebhookConfigurationError):
+    """The endpoint fails the pilot's destination policy."""
 
 
 class WebhookTransportFailure(RuntimeError):
@@ -113,55 +125,119 @@ class WebhookConfigStore:
 
     def configure(self, account_id: UUID, url: str) -> str:
         _validate_webhook_url(url, self._trusted)
-        secret = generate_webhook_secret()
-        cipher = self._require_cipher()
         with self._sessions.begin() as session:
-            account = session.execute(
-                select(Account).where(Account.id == account_id).with_for_update()
-            ).scalar_one_or_none()
-            if account is None:
-                raise WebhookConfigurationError("Conta não encontrada.")
-            current = session.scalar(
-                select(WebhookSecret.id).where(
-                    WebhookSecret.account_id == account_id,
-                    WebhookSecret.is_current.is_(True),
-                )
-            )
-            if current is not None:
-                raise WebhookConfigurationError(
-                    "O destino já tem material ativo; use rotação para trocá-lo."
-                )
-            account.webhook_url = url
-            account.webhook_disabled_at = None
-            session.add(
-                WebhookSecret(
-                    account_id=account_id,
-                    secret_ciphertext=cipher.encrypt(account_id, secret),
-                    is_current=True,
-                )
-            )
-        return secret
+            account = self._locked_account(session, account_id)
+            return self._configure(session, account, url)
 
     def set_endpoint(self, account_id: UUID, url: str) -> None:
         _validate_webhook_url(url, self._trusted)
         with self._sessions.begin() as session:
-            account = session.execute(
-                select(Account).where(Account.id == account_id).with_for_update()
-            ).scalar_one_or_none()
-            if account is None:
-                raise WebhookConfigurationError("Conta não encontrada.")
-            has_current_secret = session.scalar(
-                select(WebhookSecret.id).where(
-                    WebhookSecret.account_id == account_id,
-                    WebhookSecret.is_current.is_(True),
+            account = self._locked_account(session, account_id)
+            self._set_endpoint(session, account, url)
+
+    @staticmethod
+    def _locked_account(session: Session, account_id: UUID) -> Account:
+        account = session.execute(
+            select(Account).where(Account.id == account_id).with_for_update()
+        ).scalar_one_or_none()
+        if account is None:
+            raise WebhookAccountNotFound("Conta não encontrada.")
+        return account
+
+    @staticmethod
+    def _current_secret_id(session: Session, account_id: UUID):
+        return session.scalar(
+            select(WebhookSecret.id).where(
+                WebhookSecret.account_id == account_id,
+                WebhookSecret.is_current.is_(True),
+            )
+        )
+
+    def _configure(self, session: Session, account: Account, url: str) -> str:
+        if self._current_secret_id(session, account.id) is not None:
+            raise WebhookConfigurationError(
+                "O destino já tem material ativo; use rotação para trocá-lo."
+            )
+        cipher = self._require_cipher()
+        secret = generate_webhook_secret()
+        account.webhook_url = url
+        account.webhook_disabled_at = None
+        session.add(
+            WebhookSecret(
+                account_id=account.id,
+                secret_ciphertext=cipher.encrypt(account.id, secret),
+                is_current=True,
+            )
+        )
+        return secret
+
+    def _set_endpoint(self, session: Session, account: Account, url: str) -> None:
+        if self._current_secret_id(session, account.id) is None:
+            raise WebhookConfigurationError(
+                "Provisione o material de assinatura antes do destino."
+            )
+        account.webhook_url = url
+        account.webhook_disabled_at = None
+
+    def put_destination(self, account_id: UUID, url: str) -> dict:
+        """Create or update the single destination and its audit atomically."""
+        with self._sessions.begin() as session:
+            account = self._locked_account(session, account_id)
+            _validate_webhook_url(url, self._trusted)
+            created = account.webhook_url is None
+            if created:
+                secret = self._configure(session, account, url)
+            else:
+                self._set_endpoint(session, account, url)
+            session.flush()
+            session.add(
+                AdministrativeAudit(
+                    actor="operational_credential",
+                    account_id=account_id,
+                    action=(
+                        "webhook_destination_created"
+                        if created
+                        else "webhook_destination_updated"
+                    ),
+                    object_type="webhook_destination",
+                    object_id=str(account_id),
                 )
             )
-            if has_current_secret is None:
-                raise WebhookConfigurationError(
-                    "Provisione o material de assinatura antes do destino."
-                )
-            account.webhook_url = url
-            account.webhook_disabled_at = None
+            session.flush()
+            result = self._destination_metadata(session, account)
+            if created:
+                result["verificationMaterial"] = secret
+            return result
+
+    def get_destination(self, account_id: UUID) -> dict:
+        with self._sessions() as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                raise WebhookAccountNotFound("Conta não encontrada.")
+            if account.webhook_url is None and account.webhook_disabled_at is None:
+                raise WebhookDestinationNotFound("Destino não encontrado.")
+            return self._destination_metadata(session, account)
+
+    @staticmethod
+    def _destination_metadata(session: Session, account: Account) -> dict:
+        previous_until = session.scalar(
+            select(func.max(WebhookSecret.expires_at)).where(
+                WebhookSecret.account_id == account.id,
+                WebhookSecret.is_current.is_(False),
+                WebhookSecret.expires_at > _utc_now(),
+            )
+        )
+        return {
+            "configured": account.webhook_url is not None,
+            "active": account.webhook_url is not None
+            and account.webhook_disabled_at is None,
+            "url": account.webhook_url,
+            "previousMaterialValidUntil": (
+                previous_until.isoformat().replace("+00:00", "Z")
+                if previous_until is not None
+                else None
+            ),
+        }
 
     def rotate(self, account_id: UUID, *, immediate: bool = False) -> str:
         secret = generate_webhook_secret()
@@ -719,14 +795,14 @@ def _validate_webhook_url(url: str, trusted: TrustedDestinations | None = None):
     try:
         parsed, hostname, port = validate_source_url_syntax(url, trusted)
     except InvalidSourceURL as exc:
-        raise WebhookConfigurationError(
+        raise WebhookDestinationRejected(
             "O destino do webhook precisa ser uma URL HTTPS válida "
             "(ou HTTP explicitamente listado em TRUSTED_PRIVATE_WEBHOOKS)."
         ) from exc
     try:
         resolve_destination_addresses(hostname, port, parsed.scheme, trusted)
     except InvalidSourceURL as exc:
-        raise WebhookConfigurationError(
+        raise WebhookDestinationRejected(
             "O destino do webhook precisa resolver somente para endereços "
             "públicos ou listados em TRUSTED_PRIVATE_WEBHOOKS."
         ) from exc

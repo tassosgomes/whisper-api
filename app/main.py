@@ -28,6 +28,11 @@ from app.jobs.security import SourceURLCipher
 from app.jobs.worker import JobWorker
 from app.jobs.webhooks import (
     NotificationDispatcher,
+    WebhookAccountNotFound,
+    WebhookConfigStore,
+    WebhookConfigurationError,
+    WebhookDestinationNotFound,
+    WebhookDestinationRejected,
     WebhookHTTPTransport,
     WebhookSecretCipher,
 )
@@ -126,6 +131,11 @@ async def lifespan(application: FastAPI):
             settings.WEBHOOK_SECRET_ENCRYPTION_KEY
         )
         application.state.webhook_secret_cipher = webhook_secret_cipher
+        application.state.webhook_config_store = WebhookConfigStore(
+            database_engine,
+            webhook_secret_cipher,
+            settings.TRUSTED_PRIVATE_WEBHOOKS,
+        )
         application.state.notification_dispatcher = NotificationDispatcher(
             database_engine,
             webhook_secret_cipher,
@@ -462,6 +472,77 @@ def revoke_credential(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
     response.headers["Cache-Control"] = "no-store"
     return credential
+
+
+class PutWebhookDestinationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+
+
+@app.get(
+    "/v1/accounts/{accountId}/webhook-destination",
+    operation_id="getWebhookDestination",
+)
+def get_webhook_destination(
+    accountId: UUID, request: Request, response: Response
+) -> dict:
+    try:
+        destination = request.app.state.webhook_config_store.get_destination(accountId)
+    except WebhookAccountNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except WebhookDestinationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "DESTINATION_NOT_FOUND",
+                "detail": "Não há destino de webhook para esta conta.",
+            },
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return destination
+
+
+@app.put(
+    "/v1/accounts/{accountId}/webhook-destination",
+    operation_id="putWebhookDestination",
+)
+def put_webhook_destination(
+    accountId: UUID,
+    payload: PutWebhookDestinationRequest,
+    request: Request,
+    response: Response,
+) -> dict:
+    try:
+        destination = request.app.state.webhook_config_store.put_destination(
+            accountId, payload.url
+        )
+    except WebhookAccountNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except WebhookDestinationRejected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Destino recusado",
+                "code": "DESTINATION_REJECTED",
+                "detail": "O endereço não atende o critério do piloto, inclusive a allowlist da ADR-003.",
+            },
+        ) from exc
+    except (SQLAlchemyError, WebhookConfigurationError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    if "verificationMaterial" in destination:
+        response.status_code = status.HTTP_201_CREATED
+        response.headers["Location"] = request.url.path
+    response.headers["Cache-Control"] = "no-store"
+    return destination
 
 
 @app.get("/metrics")

@@ -216,13 +216,37 @@ _CONSOLE_PAGE = """<!doctype html>
         <button id="credential-revoke-cancel" type="button">Cancelar</button>
       </form>
     </section>
-    <section aria-labelledby="destinations-heading"><h2 id="destinations-heading">Destinos de webhook</h2></section>
+    <section aria-labelledby="destinations-heading">
+      <h2 id="destinations-heading">Destinos de webhook</h2>
+      <p id="destination-account">Selecione uma conta na lista.</p>
+      <form id="destination-form">
+        <fieldset id="destination-fields" disabled>
+          <legend>Endereço do webhook</legend>
+          <label for="destination-url">URL do destino</label>
+          <input id="destination-url" name="url" type="url" required autocomplete="off">
+          <button type="submit">Salvar destino</button>
+          <button id="destination-refresh" type="button">Consultar destino</button>
+        </fieldset>
+      </form>
+      <p id="destination-error" role="alert" hidden></p>
+      <p id="destination-status" role="status"></p>
+      <pre id="destination-detail"></pre>
+      <div id="destination-secret" hidden>
+        <p>Copie o material de verificação agora. Esta é a única exibição.</p>
+        <label for="destination-material">Material de verificação</label>
+        <input id="destination-material" type="text" readonly autocomplete="off">
+        <button id="destination-copy" type="button">Copiar material</button>
+        <button id="destination-dismiss" type="button">Fechar material</button>
+        <p id="destination-copy-status" role="status"></p>
+      </div>
+    </section>
     <section aria-labelledby="queue-heading"><h2 id="queue-heading">Fila e jobs</h2></section>
     <section aria-labelledby="attempts-heading"><h2 id="attempts-heading">Tentativas de entrega</h2></section>
   </main>
   <script>
     document.getElementById("operator-logout").addEventListener("click", async () => {
       clearCredentialSecret();
+      clearDestinationSecret();
       await fetch("/v1/operator-sessions", { method: "DELETE" });
       window.location.reload();
     });
@@ -372,6 +396,7 @@ _CONSOLE_PAGE = """<!doctype html>
 
     async function selectAccount(accountId) {
       clearCredentialSecret();
+      resetDestination();
       const view = credentialView;
       selectedAccountId = null;
       credentialIssue.disabled = true;
@@ -386,8 +411,12 @@ _CONSOLE_PAGE = """<!doctype html>
       if (view !== credentialView) return;
       selectedAccountId = account.accountId;
       document.getElementById("credential-account").textContent = `${account.name} (${account.accountId})`;
+      document.getElementById("destination-account").textContent = `${account.name} (${account.accountId})`;
       updateCredentialActions();
-      await loadCredentials();
+      await Promise.all([
+        loadCredentials(),
+        loadDestination().catch((error) => showDestinationError(error.message)),
+      ]);
     }
 
     async function loadCredentials(page = 1) {
@@ -521,6 +550,135 @@ _CONSOLE_PAGE = """<!doctype html>
       resetCredentialDetail();
       loadCredentials(credentialPage + 1).catch((error) => showCredentialError(error.message));
     });
+    const destinationForm = document.getElementById("destination-form");
+    const destinationFields = document.getElementById("destination-fields");
+    const destinationError = document.getElementById("destination-error");
+    const destinationStatus = document.getElementById("destination-status");
+    const destinationDetail = document.getElementById("destination-detail");
+    let destinationView = 0;
+    let destinationMutationPending = false;
+    let destinationLoading = false;
+
+    function clearDestinationSecret() {
+      destinationView += 1;
+      document.getElementById("destination-material").value = "";
+      document.getElementById("destination-secret").hidden = true;
+      document.getElementById("destination-copy-status").textContent = "";
+    }
+
+    function resetDestination() {
+      clearDestinationSecret();
+      destinationForm.reset();
+      destinationFields.disabled = true;
+      destinationError.hidden = true;
+      destinationStatus.textContent = "";
+      destinationDetail.textContent = "";
+      document.getElementById("destination-account").textContent = "Carregando conta…";
+    }
+
+    function showDestinationError(message) {
+      destinationError.textContent = message;
+      destinationError.hidden = false;
+    }
+
+    function updateDestinationActions() {
+      destinationFields.disabled = !selectedAccountId || destinationMutationPending || destinationLoading;
+    }
+
+    function showDestination(metadata) {
+      destinationForm.elements.url.value = metadata.url || "";
+      destinationDetail.textContent = JSON.stringify(metadata, null, 2);
+      destinationStatus.textContent = metadata.active ? "Destino ativo." : "Destino inativo.";
+    }
+
+    async function destinationRequest(accountId, options) {
+      const response = await fetch(`/v1/accounts/${accountId}/webhook-destination`, {
+        cache: "no-store", ...options,
+      });
+      if (response.status === 401) {
+        clearDestinationSecret();
+        clearCredentialSecret();
+        window.location.reload();
+      }
+      if (!response.ok) {
+        const problem = await response.json();
+        if (problem.code === "DESTINATION_NOT_FOUND" && !options) return null;
+        if (problem.code === "DESTINATION_REJECTED") {
+          throw new Error("Endereço recusado. O destino anterior permanece. Verifique o endereço e os destinos permitidos.");
+        }
+        throw new Error("Não foi possível concluir a operação. Consulte o destino antes de tentar novamente.");
+      }
+      return response.json();
+    }
+
+    async function loadDestination() {
+      clearDestinationSecret();
+      const view = destinationView;
+      const accountId = selectedAccountId;
+      if (!accountId) return;
+      destinationError.hidden = true;
+      destinationLoading = true;
+      updateDestinationActions();
+      try {
+        const destination = await destinationRequest(accountId);
+        if (view !== destinationView || accountId !== selectedAccountId) return;
+        if (destination) showDestination(destination);
+        else {
+          destinationForm.reset();
+          destinationDetail.textContent = "";
+          destinationStatus.textContent = "Nenhum destino configurado. A API Key continua válida sem avisos de webhook.";
+        }
+      } finally {
+        if (view === destinationView) {
+          destinationLoading = false;
+          updateDestinationActions();
+        }
+      }
+    }
+
+    destinationForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (destinationMutationPending || destinationLoading || !selectedAccountId) return;
+      clearDestinationSecret();
+      const view = destinationView;
+      const accountId = selectedAccountId;
+      destinationError.hidden = true;
+      destinationMutationPending = true;
+      updateDestinationActions();
+      try {
+        const result = await destinationRequest(accountId, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: destinationForm.elements.url.value }),
+        });
+        if (view !== destinationView || accountId !== selectedAccountId) return;
+        const { verificationMaterial, ...metadata } = result;
+        showDestination(metadata);
+        if (verificationMaterial) {
+          document.getElementById("destination-material").value = verificationMaterial;
+          document.getElementById("destination-secret").hidden = false;
+        }
+      } catch (error) {
+        if (view === destinationView) showDestinationError(error.message);
+      } finally {
+        destinationMutationPending = false;
+        updateDestinationActions();
+      }
+    });
+    document.getElementById("destination-refresh").addEventListener("click", () => {
+      loadDestination().catch((error) => showDestinationError(error.message));
+    });
+    document.getElementById("destination-copy").addEventListener("click", async () => {
+      const view = destinationView;
+      try {
+        await navigator.clipboard.writeText(document.getElementById("destination-material").value);
+        if (view === destinationView) document.getElementById("destination-copy-status").textContent = "Material copiado.";
+      } catch {
+        if (view === destinationView) document.getElementById("destination-copy-status").textContent = "Selecione e copie o material manualmente.";
+      }
+    });
+    document.getElementById("destination-dismiss").addEventListener("click", clearDestinationSecret);
+    window.addEventListener("pagehide", clearDestinationSecret);
     loadAccounts().catch((error) => showAccountError(error.message));
   </script>
 </body>

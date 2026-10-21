@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [2.0]
 gate: ".venv/bin/pytest -q -k v05_operator_destination"
@@ -50,8 +50,8 @@ Criação pelo fluxo que gera o material; troca pelo fluxo que não o substitui 
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v05_operator_destination`
-- [ ] Criação devolve o material uma vez e o próximo aviso terminal chega ao endereço com assinatura válida, usando o receptor HTTPS controlado do `conftest`.
-- [ ] Troca de endereço não devolve material e a entrega seguinte usa o endereço novo com o mesmo material.
-- [ ] Endereço recusado responde `422` e preserva o destino anterior.
-- [ ] A consulta do destino não traz material; conta sem destino aceita a API Key e não gera aviso.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v05_operator_destination`
+- [x] Criação devolve o material uma vez e o próximo aviso terminal chega ao endereço com assinatura válida, usando o receptor HTTPS controlado do `conftest`.
+- [x] Troca de endereço não devolve material e a entrega seguinte usa o endereço novo com o mesmo material.
+- [x] Endereço recusado responde `422` e preserva o destino anterior.
+- [x] A consulta do destino não traz material; conta sem destino aceita a API Key e não gera aviso.
