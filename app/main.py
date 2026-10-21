@@ -301,6 +301,37 @@ app.include_router(router)
 app.include_router(operator_router)
 
 
+@app.get("/v1/queue", operation_id="getQueue")
+def get_queue(request: Request, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.jobs.get_queue()
+
+
+@app.get("/v1/jobs", operation_id="listOperationalJobs")
+def list_operational_jobs(
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+    accountId: UUID | None = None,
+    state: Literal["downloading", "queued", "processing", "completed", "failed"]
+    | None = None,
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.jobs.list_operational_jobs(
+        page, size, account_id=accountId, state=state
+    )
+
+
+@app.get("/v1/jobs/{jobId}", operation_id="getOperationalJob")
+def get_operational_job(jobId: str, request: Request, response: Response) -> dict:
+    job = request.app.state.jobs.get_operational_job(jobId)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    response.headers["Cache-Control"] = "no-store"
+    return job
+
+
 class CreateAccountRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

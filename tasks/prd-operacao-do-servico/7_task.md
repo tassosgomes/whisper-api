@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [1.0]
 gate: ".venv/bin/pytest -q -k v07_operator_queue"
@@ -48,8 +48,8 @@ A vista operacional lista os campos do contrato e nada mais; não usa a consulta
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v07_operator_queue`
-- [ ] Fila com jobs de duas contas mostra tamanho e aceitação mais antiga corretos; fila vazia mostra `0` e `null`.
-- [ ] Job terminal dentro de 24 horas aparece; fora delas não aparece e responde `404`.
-- [ ] Nenhuma resposta contém URL de origem, texto, mídia ou segredo; estado e lease dos jobs não mudam com a leitura.
-- [ ] O cliente continua vendo só os jobs da própria credencial.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v07_operator_queue`
+- [x] Fila com jobs de duas contas mostra tamanho e aceitação mais antiga corretos; fila vazia mostra `0` e `null`.
+- [x] Job terminal dentro de 24 horas aparece; fora delas não aparece e responde `404`.
+- [x] Nenhuma resposta contém URL de origem, texto, mídia ou segredo; estado e lease dos jobs não mudam com a leitura.
+- [x] O cliente continua vendo só os jobs da própria credencial.

@@ -253,7 +253,19 @@ _CONSOLE_PAGE = """<!doctype html>
         <p id="destination-copy-status" role="status"></p>
       </div>
     </section>
-    <section aria-labelledby="queue-heading"><h2 id="queue-heading">Fila e jobs</h2></section>
+    <section aria-labelledby="queue-heading">
+      <h2 id="queue-heading">Fila e jobs</h2>
+      <p id="queue-summary" role="status">Carregando fila…</p>
+      <button id="queue-refresh" type="button">Atualizar fila e jobs</button>
+      <p id="queue-error" role="alert" hidden></p>
+      <ul id="job-list"></ul>
+      <nav aria-label="Páginas de jobs">
+        <button id="jobs-previous" type="button" disabled>Anterior</button>
+        <span id="jobs-pagination"></span>
+        <button id="jobs-next" type="button" disabled>Próxima</button>
+      </nav>
+      <pre id="job-detail"></pre>
+    </section>
     <section aria-labelledby="attempts-heading"><h2 id="attempts-heading">Tentativas de entrega</h2></section>
   </main>
   <script>
@@ -769,6 +781,96 @@ _CONSOLE_PAGE = """<!doctype html>
     });
     document.getElementById("destination-dismiss").addEventListener("click", clearDestinationSecret);
     window.addEventListener("pagehide", clearDestinationSecret);
+    const queueError = document.getElementById("queue-error");
+    const jobsPrevious = document.getElementById("jobs-previous");
+    const jobsNext = document.getElementById("jobs-next");
+    let jobsPage = 1;
+    let queueSummary = null;
+    let jobsView = 0;
+    let jobDetailView = 0;
+
+    function showQueueError(error) {
+      queueError.textContent = error.message;
+      queueError.hidden = false;
+    }
+
+    async function queueRequest(path) {
+      const response = await fetch(path, { cache: "no-store" });
+      if (response.status === 401) {
+        clearCredentialSecret();
+        clearDestinationSecret();
+        window.location.reload();
+      }
+      if (response.status === 404) throw new Error("Job não encontrado ou fora da retenção.");
+      if (!response.ok) throw new Error("Não foi possível consultar a fila e os jobs. Atualize para tentar novamente.");
+      return response.json();
+    }
+
+    function renderQueueSummary() {
+      if (!queueSummary) return;
+      const oldest = queueSummary.oldestAcceptedAt;
+      const age = oldest ? Math.max(0, Math.floor((Date.now() - Date.parse(oldest)) / 1000)) : null;
+      document.getElementById("queue-summary").textContent =
+        `Jobs na fila: ${queueSummary.size}. ` +
+        (age === null ? "Sem jobs pendentes." : `Idade do mais antigo: ${age} segundos (aceito em ${oldest}).`);
+    }
+
+    async function openJob(jobId) {
+      const view = ++jobDetailView;
+      document.getElementById("job-detail").textContent = "";
+      queueError.hidden = true;
+      try {
+        const job = await queueRequest(`/v1/jobs/${encodeURIComponent(jobId)}`);
+        if (view === jobDetailView) document.getElementById("job-detail").textContent = JSON.stringify(job, null, 2);
+      } catch (error) {
+        if (view === jobDetailView) showQueueError(error);
+      }
+    }
+
+    async function loadQueue(page = 1) {
+      const view = ++jobsView;
+      ++jobDetailView;
+      queueError.hidden = true;
+      document.getElementById("job-detail").textContent = "";
+      jobsPrevious.disabled = jobsNext.disabled = true;
+      try {
+        const [summary, result] = await Promise.all([
+          queueRequest("/v1/queue"),
+          queueRequest(`/v1/jobs?_page=${page}&_size=10`),
+        ]);
+        if (view !== jobsView) return;
+        queueSummary = summary;
+        renderQueueSummary();
+        const list = document.getElementById("job-list");
+        list.replaceChildren();
+        for (const job of result.data) {
+          const item = document.createElement("li");
+          item.textContent = `${job.accountName} (${job.accountId}) — ${job.jobId}: ${job.state}; aceito em ${job.acceptedAt}` +
+            (job.terminalAt ? `; encerrado em ${job.terminalAt}` : "") +
+            (job.clientReference !== undefined && job.clientReference !== null ? `; referência: ${job.clientReference}` : "");
+          const open = document.createElement("button");
+          open.type = "button";
+          open.textContent = "Consultar job";
+          open.addEventListener("click", () => openJob(job.jobId));
+          item.appendChild(open);
+          list.appendChild(item);
+        }
+        jobsPage = result.pagination.page;
+        document.getElementById("jobs-pagination").textContent = result.pagination.total === 0
+          ? "Nenhum job retido." : `Página ${jobsPage} de ${result.pagination.totalPages}`;
+        jobsPrevious.disabled = jobsPage <= 1;
+        jobsNext.disabled = jobsPage >= result.pagination.totalPages;
+      } catch (error) {
+        if (view === jobsView) showQueueError(error);
+      }
+    }
+
+    document.getElementById("queue-refresh").addEventListener("click", () => loadQueue());
+    jobsPrevious.addEventListener("click", () => loadQueue(jobsPage - 1));
+    jobsNext.addEventListener("click", () => loadQueue(jobsPage + 1));
+    const queueAgeTimer = window.setInterval(renderQueueSummary, 1000);
+    window.addEventListener("pagehide", () => window.clearInterval(queueAgeTimer));
+    loadQueue();
     loadAccounts().catch((error) => showAccountError(error.message));
   </script>
 </body>
