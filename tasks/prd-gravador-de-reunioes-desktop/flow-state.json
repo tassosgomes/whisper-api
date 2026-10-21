@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "branch": "feature/gravador-de-reunioes-desktop",
+  "original_base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
+  "base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
+  "target_ref": null,
+  "last_checkpoint": "521ad25ca5422f64a61c1191dfbf61fcf4193e75",
+  "phase": "validate",
+  "active_task": "1.0",
+  "attempt": 1,
+  "max_attempts": 3,
+  "full_attempt": 0,
+  "transport_retries": 0,
+  "specs": [
+    "techspec.md"
+  ],
+  "delivery": "pr",
+  "validated_commit": null,
+  "validated_tree": null,
+  "last_result": "implementation_complete 1.0 run.eVvkRC6K",
+  "history": [
+    {
+      "event": "scope",
+      "note": "Orquestração limitada às tasks Linux; tasks Windows (6,8,10,12,14,16,17) ficam com o usuário"
+    }
+  ]
+}

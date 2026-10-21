@@ -3,20 +3,36 @@
 from __future__ import annotations
 
 import logging
+import base64
+import binascii
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from app.access.credentials import AuthenticatedCredential
 from app.jobs.executor import IdempotencyKeyReused
+from app.jobs.uploads import (
+    CONTENT_TYPE_SUFFIXES,
+    TooManyPendingUploads,
+    UploadRejected,
+)
 from app.transcription.paths import InvalidSourceURL, validate_source_url_syntax
 from app.transcription.source import (
     ExpiredSourceURL,
     MediaSizeExceeded,
     SourceUnavailable,
     TransientSourceFailure,
+    MAX_MEDIA_SIZE_BYTES,
 )
+from app.transcription.validation import MAX_MEDIA_DURATION_SECONDS
 
 
 router = APIRouter()
@@ -28,6 +44,44 @@ class TranscriptionRequest(BaseModel):
 
     source_url: Annotated[str, Field(alias="sourceUrl", min_length=1)]
     client_reference: Annotated[str | None, Field(alias="clientReference")] = None
+
+
+class TranscriptionUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    content_type: Annotated[str, Field(alias="contentType")]
+    size_bytes: Annotated[int, Field(alias="sizeBytes", ge=1)]
+    checksum_sha256: Annotated[
+        str,
+        Field(
+            alias="checksumSha256",
+            min_length=44,
+            max_length=44,
+            pattern=r"^[A-Za-z0-9+/]{43}=$",
+        ),
+    ]
+    duration_ms: Annotated[int | None, Field(alias="durationMs", ge=1)] = None
+    client_reference: Annotated[
+        str | None, Field(alias="clientReference", max_length=256)
+    ] = None
+
+    @field_validator("checksum_sha256")
+    @classmethod
+    def validate_checksum(cls, value: str) -> str:
+        try:
+            digest = base64.b64decode(value, validate=True)
+        except binascii.Error:
+            raise ValueError("SHA-256 inválido.") from None
+        if len(digest) != 32 or base64.b64encode(digest).decode() != value:
+            raise ValueError("SHA-256 inválido.")
+        return value
+
+    @model_validator(mode="after")
+    def reject_explicit_null(self):
+        for field in ("duration_ms", "client_reference"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError("Campos opcionais não aceitam null.")
+        return self
 
 
 class TranscriptionResultSegment(BaseModel):
@@ -60,6 +114,72 @@ def authenticate_api_key(
             headers={"WWW-Authenticate": "APIKey"},
         )
     return credential
+
+
+@router.post(
+    "/v1/transcription-uploads",
+    status_code=status.HTTP_201_CREATED,
+    operation_id="createTranscriptionUpload",
+)
+def create_transcription_upload(
+    payload: TranscriptionUploadRequest,
+    request: Request,
+    response: Response,
+    credential: Annotated[AuthenticatedCredential, Depends(authenticate_api_key)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
+    ],
+) -> dict:
+    if payload.content_type not in CONTENT_TYPE_SUFFIXES:
+        raise _upload_problem(
+            422, "UNSUPPORTED_MEDIA_FORMAT", "Tipo de mídia não suportado."
+        )
+    if payload.size_bytes > MAX_MEDIA_SIZE_BYTES:
+        raise _upload_problem(413, "MEDIA_SIZE_LIMIT_EXCEEDED", "A mídia excede 5 GiB.")
+    if (
+        payload.duration_ms is not None
+        and payload.duration_ms > MAX_MEDIA_DURATION_SECONDS * 1000
+    ):
+        raise _upload_problem(
+            422, "MEDIA_DURATION_LIMIT_EXCEEDED", "A mídia excede 2 horas."
+        )
+    try:
+        body, created = request.app.state.uploads.create_or_replay(
+            payload.model_dump(by_alias=True, exclude_none=True),
+            idempotency_key=idempotency_key,
+            account_id=credential.account_id,
+            credential_id=credential.credential_id,
+        )
+    except IdempotencyKeyReused:
+        raise _upload_problem(
+            409, "IDEMPOTENCY_KEY_REUSED", "A chave já foi usada com outra solicitação."
+        ) from None
+    except UploadRejected:
+        raise _upload_problem(
+            409,
+            "UPLOAD_REJECTED",
+            "Este envio foi recusado. Use uma nova Idempotency-Key.",
+        ) from None
+    except TooManyPendingUploads:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "TOO_MANY_PENDING_UPLOADS",
+                "title": "Limite de envios pendentes",
+                "detail": "Aguarde antes de pedir outro envio.",
+            },
+            headers={"Retry-After": "60"},
+        ) from None
+    response.status_code = 201 if created else 200
+    if created:
+        response.headers["Location"] = f"/v1/transcription-uploads/{body['uploadId']}"
+    return body
+
+
+def _upload_problem(status_code: int, code: str, detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code, detail={"code": code, "detail": detail}
+    )
 
 
 @router.post("/v1/transcriptions", status_code=status.HTTP_202_ACCEPTED)

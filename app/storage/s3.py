@@ -21,6 +21,7 @@ class S3ObjectStore:
         endpoint_url: str | None = None,
         access_key_id: str | None = None,
         secret_access_key: str | None = None,
+        public_endpoint_url: str | None = None,
     ) -> None:
         if not bucket:
             raise ValueError("S3_BUCKET precisa ser configurado.")
@@ -37,6 +38,50 @@ class S3ObjectStore:
                 retries={"max_attempts": 3, "mode": "standard"},
             ),
         )
+        # Signing uses the client-visible host, never the Docker service name.
+        self.public_client = boto3.session.Session().client(
+            "s3",
+            region_name=region,
+            endpoint_url=public_endpoint_url or endpoint_url or None,
+            aws_access_key_id=access_key_id or None,
+            aws_secret_access_key=secret_access_key or None,
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+
+    @staticmethod
+    def upload_key(upload_id: str, suffix: str) -> str:
+        return f"uploads/{upload_id}/source{suffix}"
+
+    def presign_upload(
+        self,
+        key: str,
+        *,
+        content_type: str,
+        size_bytes: int,
+        checksum_sha256: str,
+        expires_in: int,
+    ) -> dict:
+        url = self.public_client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": self.bucket,
+                "Key": key,
+                "ContentType": content_type,
+                "ContentLength": size_bytes,
+                "ChecksumSHA256": checksum_sha256,
+            },
+            ExpiresIn=expires_in,
+            HttpMethod="PUT",
+        )
+        return {
+            "method": "PUT",
+            "url": url,
+            "headers": {
+                "Content-Type": content_type,
+                "Content-Length": str(size_bytes),
+                "x-amz-checksum-sha256": checksum_sha256,
+            },
+        }
 
     @staticmethod
     def media_key(job_id: str, suffix: str = "") -> str:

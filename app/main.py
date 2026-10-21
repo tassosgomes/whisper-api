@@ -25,6 +25,7 @@ from app.api.transcriptions import router
 from app.database import create_database_engine, database_url_from_env, upgrade_database
 from app.jobs.executor import JobManager
 from app.jobs.security import SourceURLCipher
+from app.jobs.uploads import UploadManager
 from app.jobs.worker import JobWorker
 from app.jobs.webhooks import (
     NotificationDispatcher,
@@ -69,6 +70,9 @@ class Settings:
     S3_ENDPOINT_URL: str | None
     S3_ACCESS_KEY_ID: str | None
     S3_SECRET_ACCESS_KEY: str | None
+    S3_PUBLIC_ENDPOINT_URL: str | None
+    UPLOAD_URL_TTL_SECONDS: int
+    UPLOAD_PENDING_LIMIT: int
     TRUSTED_PRIVATE_SOURCES: TrustedDestinations
     TRUSTED_PRIVATE_WEBHOOKS: TrustedDestinations
 
@@ -97,6 +101,9 @@ class Settings:
             S3_ENDPOINT_URL=os.getenv("S3_ENDPOINT_URL") or None,
             S3_ACCESS_KEY_ID=os.getenv("S3_ACCESS_KEY_ID") or None,
             S3_SECRET_ACCESS_KEY=os.getenv("S3_SECRET_ACCESS_KEY") or None,
+            S3_PUBLIC_ENDPOINT_URL=os.getenv("S3_PUBLIC_ENDPOINT_URL") or None,
+            UPLOAD_URL_TTL_SECONDS=int(os.getenv("UPLOAD_URL_TTL_SECONDS", "3600")),
+            UPLOAD_PENDING_LIMIT=int(os.getenv("UPLOAD_PENDING_LIMIT", "5")),
             TRUSTED_PRIVATE_SOURCES=TrustedDestinations.from_env(
                 "TRUSTED_PRIVATE_SOURCES"
             ),
@@ -114,6 +121,10 @@ class Settings:
             )
         if settings.ROLE not in {"api", "worker", "all"}:
             raise ValueError("APP_ROLE deve ser api, worker ou all.")
+        if not 1 <= settings.UPLOAD_URL_TTL_SECONDS <= 604800:
+            raise ValueError("UPLOAD_URL_TTL_SECONDS deve estar entre 1 e 604800.")
+        if settings.UPLOAD_PENDING_LIMIT < 1:
+            raise ValueError("UPLOAD_PENDING_LIMIT deve ser positivo.")
         return settings
 
 
@@ -158,11 +169,19 @@ async def lifespan(application: FastAPI):
             endpoint_url=settings.S3_ENDPOINT_URL,
             access_key_id=settings.S3_ACCESS_KEY_ID,
             secret_access_key=settings.S3_SECRET_ACCESS_KEY,
+            public_endpoint_url=settings.S3_PUBLIC_ENDPOINT_URL,
         )
         # ADR-001: valida a política efetiva do bucket usado pela aplicação
         # em runtime e falha fechada se versionamento Enabled ou Object Lock
         # ativo (aplica-se aos papéis api, worker e all).
         application.state.object_store.ensure_retention_compliant()
+        application.state.uploads = UploadManager(
+            database_engine,
+            source_url_cipher,
+            application.state.object_store,
+            url_ttl_seconds=settings.UPLOAD_URL_TTL_SECONDS,
+            pending_limit=settings.UPLOAD_PENDING_LIMIT,
+        )
         application.state.jobs = JobManager(
             database_engine,
             source_url_cipher,

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: []
 gate: ".venv/bin/pytest -q -k cap4_upload_request"
@@ -57,9 +57,14 @@ Registro de envio próprio, não `IdempotencyRecord`. Mesmo bucket do Whisper e 
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k cap4_upload_request`
-- [ ] Os testes sobem a aplicação real (`app.main.app`) com banco e bucket simulado, sem dublê do componente de envios.
-- [ ] Cada resposta de `createTranscriptionUpload` do contrato (201, 200, 400, 401, 409 nos dois casos, 413, 422 nos dois casos, 429) é exercitada, e a resposta confere com o schema do `api-contract.yaml`.
-- [ ] Repetição com os mesmos valores devolve o mesmo `uploadId`, inclusive com o relógio avançado em horas, e emite uma URL nova quando a anterior venceu.
-- [ ] A URL de envio não aparece em nenhum log capturado pelo teste nem no banco.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k cap4_upload_request`
+- [x] Os testes sobem a aplicação real (`app.main.app`) com banco e bucket simulado, sem dublê do componente de envios.
+- [x] Cada resposta de `createTranscriptionUpload` do contrato (201, 200, 400, 401, 409 nos dois casos, 413, 422 nos dois casos, 429) é exercitada, e a resposta confere com o schema do `api-contract.yaml`.
+- [x] Repetição com os mesmos valores devolve o mesmo `uploadId`, inclusive com o relógio avançado em horas, e emite uma URL nova quando a anterior venceu.
+- [x] A URL de envio não aparece em nenhum log capturado pelo teste nem no banco.
 - [ ] O smoke contra o MinIO do compose passa, ou fica registrado que o armazenamento não valida os cabeçalhos assinados e a TechSpec é reaberta.
+
+Conclusão aprovada na [revisão focused](1.0_task_review.md), Run: run.J34OaE83, sem bloqueantes.
+O último item continua pendente: os 2 smokes passaram em outra versão do MinIO; repetir com a
+imagem do compose antes da validação full é a recomendação não bloqueante R1 do validator.
+O [resumo da implementação](1.0_task_summary.md) preserva as verificações e limitações.
