@@ -36,7 +36,7 @@
     },
     {
       "id": "CAP-002",
-      "stage": "tasks",
+      "stage": "done",
       "artifacts": {
         "domain": "domains/acesso-e-contas/domain.md",
         "prd": "tasks/prd-operacao-do-servico/prd.md",
@@ -44,12 +44,34 @@
         "techspec": "tasks/prd-operacao-do-servico/techspec.md",
         "tasks": "tasks/prd-operacao-do-servico/tasks.md"
       }
+    },
+    {
+      "id": "CAP-004",
+      "stage": "tasks",
+      "artifacts": {
+        "prd": "tasks/prd-gravador-de-reunioes-desktop/prd.md",
+        "contract": "tasks/prd-gravador-de-reunioes-desktop/contracts.md",
+        "techspec": "tasks/prd-gravador-de-reunioes-desktop/techspec.md",
+        "tasks": "tasks/prd-gravador-de-reunioes-desktop/tasks.md"
+      }
     }
   ],
   "next_actions": [
     {
-      "id": "NA3",
-      "what": "Aprovar o plano de tasks do console (8 fatias) e iniciar a execução pelo orquestrador.",
+      "id": "NA4",
+      "what": "Backlog sem capacidade pendente após CAP-002 (PR #5, merge c4cf928). Definir a próxima capacidade ou priorizar as 3 recomendações não bloqueantes da revisão full (expiração de sessões, ciclo do material após 410 do receptor, operationId das sessões).",
+      "skill": "tsg-flow-capability-backlog",
+      "blocked_by": []
+    },
+    {
+      "id": "NA11",
+      "what": "Configurar no bucket de producao (s3.tasso.dev.br) a regra de ciclo de vida de 2 dias em uploads/ e confirmar versionamento e Object Lock desligados.",
+      "skill": "operacao",
+      "blocked_by": []
+    },
+    {
+      "id": "NA12",
+      "what": "Aprovar tasks.md de CAP-004 e executar com o orquestrador. As tasks de Windows (6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 17.0) exigem uma sessao do Claude no Windows.",
       "skill": "tsg-flow-orchestrator",
       "blocked_by": []
     }

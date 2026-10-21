@@ -3,8 +3,8 @@ tsg_artifact: domain-map
 product: whisper
 version: 0.1
 status: approved
-updated: 2026-09-28
-sources: vision.md@0.1
+updated: 2026-10-21
+sources: vision.md@0.2
 ---
 
 # Domain Map

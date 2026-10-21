@@ -3,8 +3,8 @@ tsg_artifact: domain
 product: whisper
 version: 0.1
 status: approved
-updated: 2026-10-13
-sources: vision.md@0.1, context/domain-map.md@0.1, backlog/capabilities.md@0.1, context/architecture-baseline.md@0.1
+updated: 2026-10-21
+sources: vision.md@0.2, context/domain-map.md@0.1, backlog/capabilities.md@0.2, context/architecture-baseline.md@0.2
 ---
 
 # Domain Document — Entrega de Notificações
