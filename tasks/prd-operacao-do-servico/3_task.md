@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [2.0]
 gate: ".venv/bin/pytest -q -k v03_operator_credential"
@@ -45,8 +45,8 @@ Regras atuais de emissão e hash de `CredentialStore` (`techspec.md#mapeamento-d
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v03_operator_credential`
-- [ ] A emissão devolve o segredo uma vez; a chave autentica a API pública; o banco guarda só o hash.
-- [ ] A segunda leitura da mesma credencial e a lista não contêm `apiKey`.
-- [ ] Segunda emissão tem id próprio e a primeira chave continua válida.
-- [ ] A trilha da emissão contém o `credentialId` e não o segredo.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v03_operator_credential`
+- [x] A emissão devolve o segredo uma vez; a chave autentica a API pública; o banco guarda só o hash.
+- [x] A segunda leitura da mesma credencial e a lista não contêm `apiKey`.
+- [x] Segunda emissão tem id próprio e a primeira chave continua válida.
+- [x] A trilha da emissão contém o `credentialId` e não o segredo.

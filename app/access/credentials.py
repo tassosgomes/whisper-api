@@ -131,7 +131,9 @@ class CredentialStore:
             session.flush()
             return self._metadata(account, credential), api_key
 
-    def issue_for_account(self, account_id: UUID) -> tuple[dict, str]:
+    def issue_for_account(
+        self, account_id: UUID, *, audit: bool = False
+    ) -> tuple[dict, str]:
         credential_id = uuid4()
         api_key = self._new_key(credential_id)
         with self._sessions.begin() as session:
@@ -146,7 +148,45 @@ class CredentialStore:
             )
             session.add(credential)
             session.flush()
+            if audit:
+                session.add(
+                    AdministrativeAudit(
+                        actor="operational_credential",
+                        account_id=account_id,
+                        action="credential_issued",
+                        object_type="credential",
+                        object_id=str(credential_id),
+                    )
+                )
+                session.flush()
             return self._metadata(account, credential), api_key
+
+    def list_credentials(self, account_id: UUID, page: int = 1, size: int = 10) -> dict:
+        with self._sessions() as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                raise CredentialNotFound("Conta não encontrada.")
+            total = session.scalar(
+                select(func.count(Credential.id)).where(
+                    Credential.account_id == account_id
+                )
+            )
+            credentials = session.scalars(
+                select(Credential)
+                .where(Credential.account_id == account_id)
+                .order_by(Credential.created_at, Credential.id)
+                .offset((page - 1) * size)
+                .limit(size)
+            ).all()
+            return {
+                "data": [self._metadata(account, item) for item in credentials],
+                "pagination": {
+                    "page": page,
+                    "size": size,
+                    "total": total,
+                    "totalPages": (total + size - 1) // size,
+                },
+            }
 
     def rotate(self, credential_id: UUID) -> tuple[dict, str]:
         api_key = self._new_key(credential_id)
@@ -244,6 +284,7 @@ class CredentialStore:
             "credentialId": str(credential.id),
             "createdAt": _isoformat(credential.created_at),
             "permissions": list(credential.permissions),
+            "status": "revoked" if credential.revoked_at is not None else "active",
             "lastUsedAt": _isoformat(credential.last_used_at),
             "rotatedAt": _isoformat(credential.rotated_at),
             "revokedAt": _isoformat(credential.revoked_at),

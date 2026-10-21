@@ -54,7 +54,7 @@ Nenhum. A trilha administrativa e sua migration nascem em 2.0, a primeira mutaç
 
 - [x] 1.0 Entrar no console com a credencial operacional
 - [x] 2.0 Criar e listar contas com trilha administrativa
-- [ ] 3.0 Emitir API Key com segredo de exibição única
+- [x] 3.0 Emitir API Key com segredo de exibição única
 - [ ] 4.0 Rotacionar e revogar API Key com motivo
 - [ ] 5.0 Configurar e trocar o destino de webhook
 - [ ] 6.0 Rotacionar o material e desativar o destino

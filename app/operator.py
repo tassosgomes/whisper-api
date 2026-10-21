@@ -186,13 +186,34 @@ _CONSOLE_PAGE = """<!doctype html>
         <button id="accounts-next" type="button" disabled>Próxima</button>
       </nav>
     </section>
-    <section aria-labelledby="credentials-heading"><h2 id="credentials-heading">Credenciais</h2></section>
+    <section aria-labelledby="credentials-heading">
+      <h2 id="credentials-heading">Credenciais</h2>
+      <p id="credential-account">Selecione uma conta na lista.</p>
+      <button id="credential-issue" type="button" disabled>Emitir API Key</button>
+      <p id="credential-error" role="alert" hidden></p>
+      <div id="credential-secret" hidden>
+        <p>Copie a API Key agora. Esta é a única exibição. Em caso de perda, será necessário rotacionar a chave.</p>
+        <label for="credential-api-key">API Key</label>
+        <input id="credential-api-key" type="text" readonly autocomplete="off">
+        <button id="credential-copy" type="button">Copiar API Key</button>
+        <button id="credential-dismiss" type="button">Fechar segredo</button>
+        <p id="credential-copy-status" role="status"></p>
+      </div>
+      <ul id="credential-list"></ul>
+      <nav aria-label="Páginas de credenciais">
+        <button id="credentials-previous" type="button" disabled>Anterior</button>
+        <span id="credentials-pagination"></span>
+        <button id="credentials-next" type="button" disabled>Próxima</button>
+      </nav>
+      <pre id="credential-detail"></pre>
+    </section>
     <section aria-labelledby="destinations-heading"><h2 id="destinations-heading">Destinos de webhook</h2></section>
     <section aria-labelledby="queue-heading"><h2 id="queue-heading">Fila e jobs</h2></section>
     <section aria-labelledby="attempts-heading"><h2 id="attempts-heading">Tentativas de entrega</h2></section>
   </main>
   <script>
     document.getElementById("operator-logout").addEventListener("click", async () => {
+      clearCredentialSecret();
       await fetch("/v1/operator-sessions", { method: "DELETE" });
       window.location.reload();
     });
@@ -216,6 +237,13 @@ _CONSOLE_PAGE = """<!doctype html>
       for (const account of result.data) {
         const item = document.createElement("li");
         item.textContent = `${account.name} (${account.accountId})`;
+        const open = document.createElement("button");
+        open.type = "button";
+        open.textContent = "Abrir conta e credenciais";
+        open.addEventListener("click", () => {
+          selectAccount(account.accountId).catch((error) => showCredentialError(error.message));
+        });
+        item.appendChild(open);
         list.appendChild(item);
       }
       accountPage = result.pagination.page;
@@ -268,6 +296,132 @@ _CONSOLE_PAGE = """<!doctype html>
     });
     nextPage.addEventListener("click", () => {
       loadAccounts(accountPage + 1).catch((error) => showAccountError(error.message));
+    });
+    const credentialIssue = document.getElementById("credential-issue");
+    const credentialError = document.getElementById("credential-error");
+    const credentialDetail = document.getElementById("credential-detail");
+    const credentialPrevious = document.getElementById("credentials-previous");
+    const credentialNext = document.getElementById("credentials-next");
+    let selectedAccountId = null;
+    let credentialPage = 1;
+    let credentialView = 0;
+
+    function clearCredentialSecret() {
+      credentialView += 1;
+      document.getElementById("credential-api-key").value = "";
+      document.getElementById("credential-secret").hidden = true;
+      document.getElementById("credential-copy-status").textContent = "";
+    }
+
+    function showCredentialError(message) {
+      credentialError.textContent = message;
+      credentialError.hidden = false;
+    }
+
+    async function credentialRequest(path, options) {
+      const response = await fetch(path, { cache: "no-store", ...options });
+      if (response.status === 401) {
+        clearCredentialSecret();
+        window.location.reload();
+      }
+      if (!response.ok) throw new Error("Não foi possível concluir a operação de credenciais. Consulte a lista antes de tentar novamente.");
+      return response.json();
+    }
+
+    async function selectAccount(accountId) {
+      clearCredentialSecret();
+      const view = credentialView;
+      selectedAccountId = null;
+      credentialIssue.disabled = true;
+      credentialPrevious.disabled = true;
+      credentialNext.disabled = true;
+      credentialError.hidden = true;
+      credentialDetail.textContent = "";
+      document.getElementById("credential-account").textContent = "Carregando conta…";
+      document.getElementById("credential-list").replaceChildren();
+      document.getElementById("credentials-pagination").textContent = "";
+      const account = await credentialRequest(`/v1/accounts/${accountId}`);
+      if (view !== credentialView) return;
+      selectedAccountId = account.accountId;
+      document.getElementById("credential-account").textContent = `${account.name} (${account.accountId})`;
+      credentialIssue.disabled = false;
+      await loadCredentials();
+    }
+
+    async function loadCredentials(page = 1) {
+      const accountId = selectedAccountId;
+      if (!accountId) return;
+      const result = await credentialRequest(`/v1/accounts/${accountId}/credentials?_page=${page}&_size=10`);
+      if (accountId !== selectedAccountId) return;
+      const list = document.getElementById("credential-list");
+      list.replaceChildren();
+      for (const credential of result.data) {
+        const item = document.createElement("li");
+        const open = document.createElement("button");
+        open.type = "button";
+        open.textContent = `${credential.credentialId} (${credential.status})`;
+        open.addEventListener("click", async () => {
+          clearCredentialSecret();
+          credentialDetail.textContent = "";
+          const view = credentialView;
+          try {
+            const detail = await credentialRequest(`/v1/credentials/${credential.credentialId}`);
+            if (view === credentialView) credentialDetail.textContent = JSON.stringify(detail, null, 2);
+          } catch (error) {
+            showCredentialError(error.message);
+          }
+        });
+        item.appendChild(open);
+        list.appendChild(item);
+      }
+      credentialPage = result.pagination.page;
+      document.getElementById("credentials-pagination").textContent =
+        result.pagination.total === 0 ? "Nenhuma credencial emitida." :
+        `Página ${credentialPage} de ${result.pagination.totalPages}`;
+      credentialPrevious.disabled = credentialPage <= 1;
+      credentialNext.disabled = credentialPage >= result.pagination.totalPages;
+    }
+
+    credentialIssue.addEventListener("click", async () => {
+      clearCredentialSecret();
+      const view = credentialView;
+      const accountId = selectedAccountId;
+      if (!accountId) return;
+      credentialError.hidden = true;
+      credentialIssue.disabled = true;
+      credentialDetail.textContent = "";
+      try {
+        const issued = await credentialRequest(`/v1/accounts/${accountId}/credentials`, { method: "POST" });
+        if (view !== credentialView) return;
+        document.getElementById("credential-api-key").value = issued.apiKey;
+        document.getElementById("credential-secret").hidden = false;
+        const { apiKey, ...metadata } = issued;
+        credentialDetail.textContent = JSON.stringify(metadata, null, 2);
+        await loadCredentials();
+      } catch (error) {
+        showCredentialError(error.message);
+      } finally {
+        credentialIssue.disabled = selectedAccountId === null;
+      }
+    });
+    document.getElementById("credential-copy").addEventListener("click", async () => {
+      const view = credentialView;
+      try {
+        await navigator.clipboard.writeText(document.getElementById("credential-api-key").value);
+        if (view === credentialView) document.getElementById("credential-copy-status").textContent = "API Key copiada.";
+      } catch {
+        if (view === credentialView) document.getElementById("credential-copy-status").textContent = "Selecione e copie a API Key manualmente.";
+      }
+    });
+    document.getElementById("credential-dismiss").addEventListener("click", clearCredentialSecret);
+    window.addEventListener("pagehide", clearCredentialSecret);
+    credentialPrevious.addEventListener("click", () => {
+      clearCredentialSecret();
+      loadCredentials(credentialPage - 1).catch((error) => showCredentialError(error.message));
+    });
+    credentialNext.addEventListener("click", () => {
+      clearCredentialSecret();
+      loadCredentials(credentialPage + 1).catch((error) => showCredentialError(error.message));
     });
     loadAccounts().catch((error) => showAccountError(error.message));
   </script>

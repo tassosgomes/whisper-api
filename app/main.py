@@ -344,6 +344,62 @@ def get_account(accountId: UUID, request: Request, response: Response) -> dict:
     return account
 
 
+@app.post(
+    "/v1/accounts/{accountId}/credentials",
+    status_code=status.HTTP_201_CREATED,
+    operation_id="issueCredential",
+)
+def issue_credential(accountId: UUID, request: Request, response: Response) -> dict:
+    try:
+        credential, api_key = request.app.state.credential_store.issue_for_account(
+            accountId, audit=True
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Location"] = f"/v1/credentials/{credential['credentialId']}"
+    response.headers["Cache-Control"] = "no-store"
+    return {**credential, "apiKey": api_key}
+
+
+@app.get("/v1/accounts/{accountId}/credentials", operation_id="listCredentials")
+def list_credentials(
+    accountId: UUID,
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+) -> dict:
+    try:
+        credentials = request.app.state.credential_store.list_credentials(
+            accountId, page, size
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return credentials
+
+
+@app.get("/v1/credentials/{credentialId}", operation_id="getCredential")
+def get_credential(credentialId: UUID, request: Request, response: Response) -> dict:
+    try:
+        credential = request.app.state.credential_store.metadata(credentialId)
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return credential
+
+
 @app.get("/metrics")
 def metrics(request: Request) -> dict:
     """Expose low-cardinality job timing, failure, and resource aggregates."""
