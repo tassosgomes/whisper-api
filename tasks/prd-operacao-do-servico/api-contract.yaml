@@ -1,0 +1,1147 @@
+openapi: 3.1.0
+info:
+  title: Whisper — Console operacional
+  version: 1.0.0
+  description: |
+    Contrato HTTP do console da CAP-002. O operador cadastra contas, emite e
+    administra API Keys, configura um destino de webhook por conta e lê a fila
+    e as tentativas de entrega. Não é a API pública de transcrição.
+
+    Fonte: tasks/prd-operacao-do-servico/prd.md v0.1, aprovado em 2026-10-13.
+    A credencial operacional compartilhada entra por formulário no mesmo host
+    e segue como cookie de sessão HttpOnly, conforme a ADR-004.
+    A API pública permanece em tasks/prd-api-transcricao-assincrona/api-contract.yaml
+    e continua autenticada só por X-API-Key. Cookie de operador nessa API e
+    API Key neste console não autorizam a chamada.
+
+    O segredo da API Key e o material de verificação do webhook aparecem uma
+    única vez, no corpo da operação que os cria ou rotaciona. Consultas
+    posteriores não os devolvem. Nenhuma resposta inclui mídia, texto da
+    transcrição, URL de origem da mídia nem corpo do aviso.
+
+    Endereço de webhook segue o critério já aceito no piloto, inclusive a
+    exceção da ADR-003 para destino privado listado. Fora dessa allowlist,
+    o endereço público continua exigindo HTTPS.
+
+    Paginação de coleções: _page a partir de 1, _size padrão 10 e máximo 100.
+    Datas em UTC, ISO 8601.
+  contact:
+    name: Equipe Whisper
+
+servers:
+  - url: /v1
+    description: Prefixo versionado no mesmo host da API pública. Os paths deste contrato não colidem com /transcriptions.
+
+security:
+  - OperatorSession: []
+
+tags:
+  - name: OperatorSession
+    description: Entrada e saída da credencial operacional compartilhada.
+  - name: Accounts
+    description: Contas cliente cadastradas pelo operador.
+  - name: Credentials
+    description: API Keys da conta. O segredo sai uma única vez.
+  - name: WebhookDestinations
+    description: Um destino de webhook por conta.
+  - name: Queue
+    description: Fila e jobs retidos, sem conteúdo.
+  - name: DeliveryAttempts
+    description: Tentativas e falhas de webhook, sem o corpo do aviso.
+
+paths:
+  /operator-sessions:
+    post:
+      summary: Abrir sessão do operador
+      description: |
+        Confere a credencial operacional compartilhada e, se for válida,
+        inicia a sessão. A API Key de cliente não abre o console. O corpo
+        da resposta não devolve o segredo. A sessão não autoriza
+        POST /transcriptions nem a leitura de jobs na API pública.
+      operationId: openOperatorSession
+      tags: [OperatorSession]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenOperatorSessionRequest"
+      responses:
+        "204":
+          description: Sessão aberta. O cookie operator_session é HttpOnly.
+          headers:
+            Set-Cookie:
+              description: Cookie de sessão. Não contém a API Key nem o material de webhook.
+              schema:
+                type: string
+                examples:
+                  - operator_session=7f3c9a; HttpOnly; Path=/; SameSite=Lax
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      summary: Encerrar sessão do operador
+      description: Encerra a sessão atual. Sem sessão, a resposta continua 204 e nenhum dado operacional é devolvido.
+      operationId: closeOperatorSession
+      tags: [OperatorSession]
+      security:
+        - OperatorSession: []
+      responses:
+        "204":
+          description: Sessão encerrada ou já ausente.
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /accounts:
+    get:
+      summary: Listar contas
+      description: Lista as contas pelo nome. Não inclui segredo de API Key nem material de webhook.
+      operationId: listAccounts
+      tags: [Accounts]
+      security:
+        - OperatorSession: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Página de contas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    post:
+      summary: Criar conta
+      description: Cria uma conta com nome que a distingue das demais. Nome vazio não cria conta. A conta fica disponível para emissão de credencial e configuração de destino.
+      operationId: createAccount
+      tags: [Accounts]
+      security:
+        - OperatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccountRequest"
+      responses:
+        "201":
+          description: Conta criada.
+          headers:
+            Location:
+              description: URL da conta criada.
+              schema:
+                type: string
+                format: uri-reference
+                examples:
+                  - /v1/accounts/4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Nome vazio.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                emptyName:
+                  value:
+                    type: about:blank
+                    title: Nome obrigatório
+                    status: 422
+                    detail: A conta precisa de um nome que a distinga das demais.
+                    instance: /v1/accounts
+                    code: ACCOUNT_NAME_REQUIRED
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /accounts/{accountId}:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    get:
+      summary: Consultar conta
+      description: Devolve a conta, a situação do destino e a contagem de credenciais. Não devolve segredos.
+      operationId: getAccount
+      tags: [Accounts]
+      security:
+        - OperatorSession: []
+      responses:
+        "200":
+          description: Conta encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /accounts/{accountId}/credentials:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    get:
+      summary: Listar credenciais da conta
+      description: Metadados das API Keys da conta. O segredo não volta, mesmo que tenha sido emitido nesta sessão.
+      operationId: listCredentials
+      tags: [Credentials]
+      security:
+        - OperatorSession: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Página de credenciais sem segredo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    post:
+      summary: Emitir API Key
+      description: |
+        Emite a primeira ou uma credencial adicional. Cada emissão recebe
+        credentialId próprio. As anteriores continuam válidas. As permissões
+        iniciais são as do piloto: criar jobs e ler estado e resultado só
+        dos jobs criados por essa credencial. O campo apiKey aparece só
+        nesta resposta.
+      operationId: issueCredential
+      tags: [Credentials]
+      security:
+        - OperatorSession: []
+      responses:
+        "201":
+          description: Credencial emitida. O segredo aparece uma única vez.
+          headers:
+            Location:
+              description: URL dos metadados, que não repetem o segredo.
+              schema:
+                type: string
+                format: uri-reference
+                examples:
+                  - /v1/credentials/9c2e1b70-1a44-4d2e-8f55-0a6b7c8d9e01
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialSecret"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /credentials/{credentialId}:
+    parameters:
+      - $ref: "#/components/parameters/CredentialId"
+    get:
+      summary: Consultar metadados da credencial
+      description: Identificador, conta, permissões, criação, último uso e situação de rotação ou revogação. Não há como recuperar o segredo.
+      operationId: getCredential
+      tags: [Credentials]
+      security:
+        - OperatorSession: []
+      responses:
+        "200":
+          description: Metadados sem segredo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Credential"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /credentials/{credentialId}/rotate:
+    parameters:
+      - $ref: "#/components/parameters/CredentialId"
+    post:
+      summary: Rotacionar API Key
+      description: |
+        O credentialId permanece. O segredo novo aparece uma única vez e a
+        chave substituída deixa de autorizar chamadas. Jobs já criados por
+        essa credencial continuam associados a ela. O destino e o material
+        de webhook não mudam.
+      operationId: rotateCredential
+      tags: [Credentials]
+      security:
+        - OperatorSession: []
+      responses:
+        "200":
+          description: Segredo novo, exibido uma única vez.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialSecret"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Credencial já revogada.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                revoked:
+                  value:
+                    type: about:blank
+                    title: Credencial revogada
+                    status: 409
+                    detail: Uma credencial revogada não é rotacionada.
+                    instance: /v1/credentials/9c2e1b70-1a44-4d2e-8f55-0a6b7c8d9e01/rotate
+                    code: CREDENTIAL_REVOKED
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /credentials/{credentialId}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/CredentialId"
+    post:
+      summary: Revogar API Key
+      description: |
+        Exige motivo. Sem motivo, a credencial não muda. Depois da revogação,
+        chamadas com ela são recusadas sem revelar job. O segredo não reaparece.
+        A trilha guarda o momento, a credencial operacional, a conta, o
+        credentialId e o motivo.
+      operationId: revokeCredential
+      tags: [Credentials]
+      security:
+        - OperatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Credencial revogada. A resposta não inclui o segredo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Credential"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ReasonRequired"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /accounts/{accountId}/webhook-destination:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    get:
+      summary: Consultar destino de webhook
+      description: |
+        Informa se há destino, se está ativo e o endereço. Não devolve o
+        material de verificação. Conta sem destino responde configured false.
+        Destino desativado pelo operador ou pelo receptor aparece active false.
+      operationId: getWebhookDestination
+      tags: [WebhookDestinations]
+      security:
+        - OperatorSession: []
+      responses:
+        "200":
+          description: Situação do único destino da conta.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDestination"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    put:
+      summary: Gravar o endereço do destino
+      description: |
+        A conta tem no máximo um destino. Sem destino, esta operação cria o
+        destino, passa a usá-lo nos jobs terminais seguintes e devolve o
+        material de verificação uma única vez. Com destino já existente,
+        troca só o endereço aceito: o material atual permanece, não é
+        reexibido e as entregas seguintes usam o endereço novo. Endereço
+        recusado pelo critério do piloto não grava nada e preserva o destino
+        anterior. Não cria um segundo destino.
+      operationId: putWebhookDestination
+      tags: [WebhookDestinations]
+      security:
+        - OperatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutWebhookDestinationRequest"
+      responses:
+        "200":
+          description: Endereço substituído. O material vigente não é devolvido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDestination"
+        "201":
+          description: Primeiro destino da conta. O material aparece uma única vez.
+          headers:
+            Location:
+              description: URL de consulta do destino, que não repete o material.
+              schema:
+                type: string
+                format: uri-reference
+                examples:
+                  - /v1/accounts/4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11/webhook-destination
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDestinationSecret"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Endereço recusado. O destino anterior, se existir, permanece.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                rejected:
+                  value:
+                    type: about:blank
+                    title: Destino recusado
+                    status: 422
+                    detail: O endereço não atende o critério do piloto, inclusive a allowlist da ADR-003.
+                    instance: /v1/accounts/4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11/webhook-destination
+                    code: DESTINATION_REJECTED
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /accounts/{accountId}/webhook-destination/rotate:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    post:
+      summary: Rotacionar material de verificação
+      description: |
+        planned mantém o material anterior válido por 72 horas e mostra o
+        novo uma única vez. immediate exige motivo, invalida o anterior na
+        hora e mostra o novo uma única vez. Sem motivo no modo immediate,
+        nada muda. O endereço permanece. Rotação de API Key não passa por
+        esta operação e não altera o material.
+      operationId: rotateWebhookMaterial
+      tags: [WebhookDestinations]
+      security:
+        - OperatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateWebhookMaterialRequest"
+      responses:
+        "200":
+          description: Material novo, exibido uma única vez.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDestinationSecret"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: A conta não tem destino para rotacionar.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                missing:
+                  value:
+                    type: about:blank
+                    title: Destino ausente
+                    status: 404
+                    detail: Não há destino de webhook para rotacionar.
+                    instance: /v1/accounts/4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11/webhook-destination/rotate
+                    code: DESTINATION_NOT_FOUND
+        "422":
+          $ref: "#/components/responses/ReasonRequired"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /accounts/{accountId}/webhook-destination/deactivate:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    post:
+      summary: Desativar destino
+      description: |
+        Exige motivo. Sem motivo, o destino não muda. Com motivo, novas
+        entregas cessam e os materiais ativos deixam de valer. A consulta
+        seguinte mostra active false. Não devolve material.
+      operationId: deactivateWebhookDestination
+      tags: [WebhookDestinations]
+      security:
+        - OperatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Destino desativado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDestination"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ReasonRequired"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /queue:
+    get:
+      summary: Resumir a fila
+      description: |
+        Tamanho é a quantidade de jobs que ainda não estão completed nem
+        failed, em todas as contas. oldestAcceptedAt é a aceitação do mais
+        antigo entre eles. Sem job não terminal, size é 0 e
+        oldestAcceptedAt é null. Não lista mídia nem texto.
+      operationId: getQueue
+      tags: [Queue]
+      security:
+        - OperatorSession: []
+      responses:
+        "200":
+          description: Resumo da fila.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /jobs:
+    get:
+      summary: Listar jobs ainda retidos
+      description: |
+        Jobs não terminais e jobs completed ou failed há até 24 horas.
+        Um job terminal há mais de 24 horas não aparece. Cada item traz
+        conta, identificador, estado, horários disponíveis e a referência
+        opaca enviada pelo cliente, se houver. Não traz mídia, texto,
+        URL de origem nem segredo. A consulta do cliente com API Key
+        continua restrita aos jobs da própria credencial e não usa este path.
+      operationId: listOperationalJobs
+      tags: [Queue]
+      security:
+        - OperatorSession: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - name: accountId
+          in: query
+          required: false
+          description: Restringe à conta.
+          schema:
+            type: string
+            format: uuid
+            examples:
+              - 4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11
+        - name: state
+          in: query
+          required: false
+          description: Estado público do job.
+          schema:
+            $ref: "#/components/schemas/JobState"
+      responses:
+        "200":
+          description: Página de jobs retidos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationalJobPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /jobs/{jobId}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      summary: Consultar job retido
+      description: |
+        O mesmo recorte da lista, para um job ainda dentro da retenção.
+        O estado é o do processamento. Falha de entrega não o altera.
+        Fora da retenção, a resposta é 404. Tentativas de webhook desse
+        job podem continuar em /delivery-attempts.
+      operationId: getOperationalJob
+      tags: [Queue]
+      security:
+        - OperatorSession: []
+      responses:
+        "200":
+          description: Job sem conteúdo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationalJob"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /delivery-attempts:
+    get:
+      summary: Listar tentativas de entrega
+      description: |
+        Tentativas que o serviço ainda guarda, inclusive depois que o
+        metadado do job saiu da retenção. Mostra conta, job, identificador
+        do evento, a falha e se haverá nova tentativa. Não mostra material
+        de verificação, corpo do aviso nem URL de origem da mídia.
+      operationId: listDeliveryAttempts
+      tags: [DeliveryAttempts]
+      security:
+        - OperatorSession: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - name: accountId
+          in: query
+          required: false
+          description: Restringe à conta.
+          schema:
+            type: string
+            format: uuid
+            examples:
+              - 4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11
+        - name: jobId
+          in: query
+          required: false
+          description: Restringe ao job.
+          schema:
+            type: string
+            format: uuid
+            examples:
+              - 18f0c2aa-77b1-4c33-9d44-55e6f708192a
+        - name: willRetry
+          in: query
+          required: false
+          description: true lista só falhas que ainda serão tentadas.
+          schema:
+            type: boolean
+            examples:
+              - true
+      responses:
+        "200":
+          description: Página de tentativas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryAttemptPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    OperatorSession:
+      type: apiKey
+      in: cookie
+      name: operator_session
+      description: |
+        Sessão criada por POST /operator-sessions. Cookie HttpOnly no mesmo
+        host. Não é a API Key e não é aceito na API pública de transcrição.
+
+  parameters:
+    Page:
+      name: _page
+      in: query
+      description: Página, a partir de 1.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+        examples:
+          - 1
+    Size:
+      name: _size
+      in: query
+      description: Itens por página. Padrão 10, máximo 100.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+        examples:
+          - 10
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      description: Conta cliente.
+      schema:
+        type: string
+        format: uuid
+        examples:
+          - 4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11
+    CredentialId:
+      name: credentialId
+      in: path
+      required: true
+      description: Credencial de API. O identificador sobrevive à rotação.
+      schema:
+        type: string
+        format: uuid
+        examples:
+          - 9c2e1b70-1a44-4d2e-8f55-0a6b7c8d9e01
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      description: Job de transcrição.
+      schema:
+        type: string
+        format: uuid
+        examples:
+          - 18f0c2aa-77b1-4c33-9d44-55e6f708192a
+
+  responses:
+    Unauthorized:
+      description: Sessão ausente ou credencial que não é a operacional.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            session:
+              value:
+                type: about:blank
+                title: Autenticação necessária
+                status: 401
+                detail: A credencial operacional não foi aceita.
+                instance: /v1/accounts
+                code: UNAUTHORIZED
+    NotFound:
+      description: Recurso inexistente para o operador, sem revelar conteúdo.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            missing:
+              value:
+                type: about:blank
+                title: Recurso não encontrado
+                status: 404
+                detail: O recurso não está disponível.
+                instance: /v1/jobs/18f0c2aa-77b1-4c33-9d44-55e6f708192a
+                code: NOT_FOUND
+    ReasonRequired:
+      description: A confirmação não tem motivo. O recurso não muda.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            reason:
+              value:
+                type: about:blank
+                title: Motivo obrigatório
+                status: 422
+                detail: Informe o motivo antes de confirmar.
+                instance: /v1/credentials/9c2e1b70-1a44-4d2e-8f55-0a6b7c8d9e01/revoke
+                code: REASON_REQUIRED
+    InternalServerError:
+      description: Falha inesperada, sem segredo, mídia ou URL de origem.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            unexpected:
+              value:
+                type: about:blank
+                title: Erro interno
+                status: 500
+                detail: A operação não pôde ser concluída.
+                instance: /v1/queue
+                code: INTERNAL_ERROR
+
+  schemas:
+    Problem:
+      type: object
+      additionalProperties: true
+      required: [type, title, status]
+      description: Erro RFC 9457. Não inclui segredo, mídia, transcrição nem URL de origem.
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          examples: ["about:blank"]
+        title:
+          type: string
+          examples: ["Autenticação necessária"]
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+          examples: [401]
+        detail:
+          type: string
+          examples: ["A credencial operacional não foi aceita."]
+        instance:
+          type: string
+          format: uri-reference
+          examples: ["/v1/accounts"]
+        code:
+          type: string
+          examples: ["UNAUTHORIZED"]
+        traceId:
+          type: string
+          examples: ["00-9f2b5d6c4e7a8b90123456789abcdef0-0123456789abcdef-01"]
+
+    Pagination:
+      type: object
+      required: [page, size, total, totalPages]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          examples: [1]
+        size:
+          type: integer
+          minimum: 1
+          examples: [10]
+        total:
+          type: integer
+          minimum: 0
+          examples: [2]
+        totalPages:
+          type: integer
+          minimum: 0
+          examples: [1]
+
+    OpenOperatorSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [secret]
+      properties:
+        secret:
+          type: string
+          minLength: 1
+          description: Credencial operacional compartilhada. Não é uma API Key.
+          examples: ["operador-piloto"]
+
+    CreateAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Nome que distingue a conta das demais.
+          examples: ["code-for-coders"]
+
+    Account:
+      type: object
+      required: [accountId, name, credentialCount, webhookDestination]
+      properties:
+        accountId:
+          type: string
+          format: uuid
+          examples: ["4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11"]
+        name:
+          type: string
+          examples: ["code-for-coders"]
+        credentialCount:
+          type: integer
+          minimum: 0
+          examples: [1]
+        webhookDestination:
+          $ref: "#/components/schemas/WebhookDestination"
+
+    AccountPage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Account"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    Credential:
+      type: object
+      required: [credentialId, accountId, permissions, createdAt, status]
+      description: Metadados. Este schema não tem o segredo.
+      properties:
+        credentialId:
+          type: string
+          format: uuid
+          examples: ["9c2e1b70-1a44-4d2e-8f55-0a6b7c8d9e01"]
+        accountId:
+          type: string
+          format: uuid
+          examples: ["4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11"]
+        permissions:
+          type: array
+          description: Permissões iniciais do piloto.
+          items:
+            type: string
+            examples: ["transcriptions:write", "transcriptions:read-own"]
+        createdAt:
+          type: string
+          format: date-time
+          examples: ["2026-10-13T15:04:00Z"]
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+          examples: ["2026-10-13T16:10:00Z"]
+        status:
+          type: string
+          enum: [active, revoked]
+          examples: ["active"]
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+          examples: [null]
+        rotatedAt:
+          type: [string, "null"]
+          format: date-time
+          examples: [null]
+
+    CredentialSecret:
+      allOf:
+        - $ref: "#/components/schemas/Credential"
+        - type: object
+          required: [apiKey]
+          properties:
+            apiKey:
+              type: string
+              description: Segredo exibido uma única vez nesta resposta. Consultas seguintes não o devolvem.
+              examples: ["whsk_live_4f8a91c2e6b74d0a"]
+
+    CredentialPage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Credential"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    WebhookDestination:
+      type: object
+      required: [configured, active]
+      description: Destino sem material de verificação.
+      properties:
+        configured:
+          type: boolean
+          examples: [true]
+        active:
+          type: boolean
+          description: false quando o operador desativou ou o destino deixou de estar ativo pela resposta do receptor.
+          examples: [true]
+        url:
+          type: [string, "null"]
+          examples: ["https://media.example.com/webhooks/v1/transcription-events"]
+        previousMaterialValidUntil:
+          type: [string, "null"]
+          format: date-time
+          description: Fim da sobreposição de 72 horas depois de uma rotação planejada. Null quando não há material anterior válido.
+          examples: ["2026-10-16T15:04:00Z"]
+
+    WebhookDestinationSecret:
+      allOf:
+        - $ref: "#/components/schemas/WebhookDestination"
+        - type: object
+          required: [verificationMaterial]
+          properties:
+            verificationMaterial:
+              type: string
+              description: Material de verificação exibido uma única vez. Independente da API Key.
+              examples: ["whsec_8c1d44e0a91b"]
+
+    PutWebhookDestinationRequest:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          minLength: 1
+          description: Endereço único da conta. HTTPS público, ou http somente se a ADR-003 o listar.
+          examples: ["https://media.example.com/webhooks/v1/transcription-events"]
+
+    RotateWebhookMaterialRequest:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [planned, immediate]
+          examples: ["planned"]
+        reason:
+          type: string
+          description: Obrigatório quando mode é immediate. Ausente ou vazio não altera o material.
+          examples: ["material visto em log"]
+
+    ReasonRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          examples: ["chave copiada para o canal errado"]
+
+    QueueSummary:
+      type: object
+      required: [size, oldestAcceptedAt]
+      properties:
+        size:
+          type: integer
+          minimum: 0
+          description: Jobs que ainda não estão completed nem failed.
+          examples: [2]
+        oldestAcceptedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Aceitação do não terminal mais antigo. Null quando size é 0.
+          examples: ["2026-10-13T14:02:00Z"]
+
+    JobState:
+      type: string
+      enum: [downloading, queued, processing, completed, failed]
+      examples: ["queued"]
+
+    OperationalJob:
+      type: object
+      required: [jobId, accountId, accountName, credentialId, state, acceptedAt]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+          examples: ["18f0c2aa-77b1-4c33-9d44-55e6f708192a"]
+        accountId:
+          type: string
+          format: uuid
+          examples: ["4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11"]
+        accountName:
+          type: string
+          examples: ["code-for-coders"]
+        credentialId:
+          type: string
+          format: uuid
+          examples: ["9c2e1b70-1a44-4d2e-8f55-0a6b7c8d9e01"]
+        state:
+          $ref: "#/components/schemas/JobState"
+        acceptedAt:
+          type: string
+          format: date-time
+          examples: ["2026-10-13T14:02:00Z"]
+        terminalAt:
+          type: [string, "null"]
+          format: date-time
+          examples: [null]
+        clientReference:
+          type: [string, "null"]
+          description: Referência opaca enviada pelo cliente na criação, se houver.
+          examples: ["asset-7891"]
+
+    OperationalJobPage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OperationalJob"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    DeliveryAttempt:
+      type: object
+      required: [attemptId, accountId, jobId, eventId, occurredAt, willRetry, destinationActive]
+      properties:
+        attemptId:
+          type: string
+          format: uuid
+          examples: ["aa10b9c8-1234-4e5f-a678-90abcdef1234"]
+        accountId:
+          type: string
+          format: uuid
+          examples: ["4b1d0c3e-6f2a-4a7b-9c10-2e5d8a7b6c11"]
+        jobId:
+          type: string
+          format: uuid
+          description: Identifica o job mesmo depois que o metadado saiu da retenção.
+          examples: ["18f0c2aa-77b1-4c33-9d44-55e6f708192a"]
+        eventId:
+          type: string
+          description: Identificador estável do evento de aviso.
+          examples: ["msg_01J9X8"]
+        occurredAt:
+          type: string
+          format: date-time
+          examples: ["2026-10-13T14:40:00Z"]
+        willRetry:
+          type: boolean
+          description: false quando a falha está encerrada.
+          examples: [true]
+        failure:
+          type: string
+          description: Resumo seguro da falha. Não é o corpo do aviso.
+          examples: ["receptor respondeu 503"]
+        destinationActive:
+          type: boolean
+          examples: [true]
+
+    DeliveryAttemptPage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeliveryAttempt"
+        pagination:
+          $ref: "#/components/schemas/Pagination"

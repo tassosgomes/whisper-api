@@ -1,11 +1,13 @@
 {
   "schema": "tsg-flow-state/1",
   "product": "whisper",
-  "updated": "2026-09-28",
+  "updated": "2026-10-21",
   "artifacts": {
     "vision": "vision.md",
     "domain-map": "context/domain-map.md",
-    "architecture-baseline": "context/architecture-baseline.md"
+    "architecture-baseline": "context/architecture-baseline.md",
+    "capability-backlog": "backlog/capabilities.md",
+    "domain": "domains/entrega-de-notificacoes/domain.md"
   },
   "foundation": {
     "status": "pending",
@@ -23,12 +25,32 @@
     "done",
     "descartada"
   ],
-  "capabilities": [],
+  "capabilities": [
+    {
+      "id": "CAP-001",
+      "stage": "done",
+      "mvp_order": 1,
+      "artifacts": {
+        "domain": "domains/transcricao-e-jobs/domain.md"
+      }
+    },
+    {
+      "id": "CAP-002",
+      "stage": "tasks",
+      "artifacts": {
+        "domain": "domains/acesso-e-contas/domain.md",
+        "prd": "tasks/prd-operacao-do-servico/prd.md",
+        "contract": "tasks/prd-operacao-do-servico/contracts.md",
+        "techspec": "tasks/prd-operacao-do-servico/techspec.md",
+        "tasks": "tasks/prd-operacao-do-servico/tasks.md"
+      }
+    }
+  ],
   "next_actions": [
     {
-      "id": "NA1",
-      "what": "Prosseguir com a TechSpec usando o baseline; fechar OD1-OD7 antes de aprovar contratos e tarefas de implementação ou iniciar o piloto.",
-      "skill": "tsg-flow-techspec-creator",
+      "id": "NA3",
+      "what": "Aprovar o plano de tasks do console (8 fatias) e iniciar a execução pelo orquestrador.",
+      "skill": "tsg-flow-orchestrator",
       "blocked_by": []
     }
   ],
@@ -83,5 +105,24 @@
       "blocks": []
     }
   ],
-  "decisions": []
+  "decisions": [
+    {
+      "id": "D1",
+      "what": "Quem cadastra conta, API Key e destino nesta entrega.",
+      "decision": "O operador do Whisper cadastra a conta, emite e administra a API Key e configura a URL de webhook. Autoatendimento do cliente fica fora.",
+      "decided_at": "2026-10-12"
+    },
+    {
+      "id": "D2",
+      "what": "O que a tela operacional mostra nesta entrega.",
+      "decision": "Fila de jobs, com estado, tamanho e idade, e falhas e retentativas de webhook. Sem saúde de workers, sem mídia e sem texto da transcrição.",
+      "decided_at": "2026-10-12"
+    },
+    {
+      "id": "D3",
+      "what": "Quem autentica o console nesta entrega.",
+      "decision": "Uma credencial operacional compartilhada. Operadores nomeados ficam fora. A API Key do cliente não abre o console.",
+      "decided_at": "2026-10-12"
+    }
+  ]
 }

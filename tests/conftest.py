@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import socket
 import ssl
@@ -21,13 +25,14 @@ from moto.server import ThreadedMotoServer
 from sqlalchemy import delete
 from sqlalchemy.engine import URL, make_url
 
-from app.access.models import Account, Credential
+from app.access.models import Account, AdministrativeAudit, Credential
 from app.jobs.models import IdempotencyRecord, TranscriptionJob
 from app.main import app
 
 
 TEST_SOURCE_URL_ENCRYPTION_KEY = "1a" * 32
 TEST_WEBHOOK_SECRET_ENCRYPTION_KEY = "2b" * 32
+TEST_OPERATOR_SECRET = "operator-test-secret-for-integration-tests"
 TEST_SOURCE_HOST = "media.example.test"
 TEST_WEBHOOK_HOST = "webhook.example.test"
 TEST_SOURCE_IP = "93.184.216.34"
@@ -260,11 +265,21 @@ def controlled_https_origin(
 
 
 @pytest.fixture
+def operator_cookie_secure_env(monkeypatch, request):
+    value = getattr(request, "param", None)
+    if value is None:
+        monkeypatch.delenv("OPERATOR_COOKIE_SECURE", raising=False)
+    else:
+        monkeypatch.setenv("OPERATOR_COOKIE_SECURE", value)
+
+
+@pytest.fixture
 def all_roles_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     controlled_https_origin: ControlledOrigin,
     controlled_s3_endpoint: str,
+    operator_cookie_secure_env,
 ):
     """Boot the real API + worker role composition in one process."""
     monkeypatch.setenv("DATABASE_URL", test_database_url())
@@ -272,6 +287,7 @@ def all_roles_client(
     monkeypatch.setenv(
         "WEBHOOK_SECRET_ENCRYPTION_KEY", TEST_WEBHOOK_SECRET_ENCRYPTION_KEY
     )
+    monkeypatch.setenv("OPERATOR_SECRET", TEST_OPERATOR_SECRET)
     monkeypatch.setenv("APP_ROLE", "all")
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")
@@ -286,7 +302,7 @@ def all_roles_client(
     monkeypatch.setenv("APP_OUTPUT_DIR", str(output_dir))
     monkeypatch.setattr("app.main.Transcriber", FakeTranscriber)
 
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="https://testserver") as test_client:
         test_client.app.state.test_source_url = controlled_https_origin.source_url
         test_client.app.state.test_source = controlled_https_origin
         yield test_client
@@ -295,6 +311,7 @@ def all_roles_client(
             connection.execute(delete(IdempotencyRecord))
             connection.execute(delete(TranscriptionJob))
             connection.execute(delete(Credential))
+            connection.execute(delete(AdministrativeAudit))
             connection.execute(delete(Account))
         store = test_client.app.state.object_store
         for prefix in ("media/", "results/"):
@@ -314,12 +331,14 @@ def client(
     tmp_path: Path,
     controlled_https_origin: ControlledOrigin,
     controlled_s3_endpoint: str,
+    operator_cookie_secure_env,
 ):
     monkeypatch.setenv("DATABASE_URL", test_database_url())
     monkeypatch.setenv("SOURCE_URL_ENCRYPTION_KEY", TEST_SOURCE_URL_ENCRYPTION_KEY)
     monkeypatch.setenv(
         "WEBHOOK_SECRET_ENCRYPTION_KEY", TEST_WEBHOOK_SECRET_ENCRYPTION_KEY
     )
+    monkeypatch.setenv("OPERATOR_SECRET", TEST_OPERATOR_SECRET)
     monkeypatch.setenv("APP_ROLE", "api")
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")
@@ -334,7 +353,7 @@ def client(
     monkeypatch.setenv("APP_OUTPUT_DIR", str(output_dir))
     monkeypatch.setattr("app.main.Transcriber", FakeTranscriber)
 
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="https://testserver") as test_client:
         test_client.app.state.test_source_url = controlled_https_origin.source_url
         test_client.app.state.test_source = controlled_https_origin
         yield test_client
@@ -343,6 +362,7 @@ def client(
             connection.execute(delete(IdempotencyRecord))
             connection.execute(delete(TranscriptionJob))
             connection.execute(delete(Credential))
+            connection.execute(delete(AdministrativeAudit))
             connection.execute(delete(Account))
         store = test_client.app.state.object_store
         for prefix in ("media/", "results/"):
@@ -354,3 +374,162 @@ def client(
                 continue
             for item in response.get("Contents", []):
                 store.delete(item["Key"])
+
+
+class ControlledWebhookReceiver:
+    def __init__(self, certificate: str, private_key: str):
+        self._lock = threading.RLock()
+        self._requests: list[dict] = []
+        self._accepted_secrets: list[str] = []
+        self._statuses: list[int] = [200]
+        self._retry_after: list[str | None] = []
+        self._redirect_location: str | None = None
+        self._seen_ids: set[str] = set()
+
+        receiver = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw_body = self.rfile.read(content_length)
+                headers = {key.lower(): value for key, value in self.headers.items()}
+                valid, duplicate = receiver._verify(headers, raw_body)
+                with receiver._lock:
+                    request_index = len(receiver._requests)
+                    receiver._requests.append(
+                        {
+                            "headers": headers,
+                            "path": self.path,
+                            "body": raw_body,
+                            "valid": valid,
+                            "duplicate": duplicate,
+                        }
+                    )
+                    status_index = min(request_index, len(receiver._statuses) - 1)
+                    status_code = receiver._statuses[status_index]
+                    retry_after = (
+                        receiver._retry_after[request_index]
+                        if request_index < len(receiver._retry_after)
+                        else None
+                    )
+                    location = receiver._redirect_location
+                self.send_response(status_code)
+                if retry_after is not None:
+                    self.send_header("Retry-After", retry_after)
+                if location is not None:
+                    self.send_header("Location", location)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certificate, private_key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        self._server = server
+        self._thread = threading.Thread(target=server.serve_forever, daemon=True)
+        self._thread.start()
+        self.url = f"https://{TEST_WEBHOOK_HOST}:{server.server_address[1]}/terminal"
+
+    def close(self):
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+    @property
+    def requests(self) -> list[dict]:
+        with self._lock:
+            return list(self._requests)
+
+    def allow_secret(self, secret: str) -> None:
+        with self._lock:
+            self._accepted_secrets.append(secret)
+
+    def respond_with(
+        self,
+        *statuses: int,
+        retry_after: tuple[str | None, ...] = (),
+        redirect_location: str | None = None,
+    ) -> None:
+        with self._lock:
+            self._statuses = list(statuses) or [200]
+            self._retry_after = list(retry_after)
+            self._redirect_location = redirect_location
+
+    def wait_for_requests(self, count: int, timeout: float = 5.0) -> list[dict]:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            requests = self.requests
+            if len(requests) >= count:
+                return requests
+            time.sleep(0.01)
+        return self.requests
+
+    def _verify(self, headers: dict[str, str], raw_body: bytes) -> tuple[bool, bool]:
+        event_id = headers.get("webhook-id", "")
+        timestamp = headers.get("webhook-timestamp", "")
+        try:
+            payload = json.loads(raw_body)
+            event_time = int(timestamp)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return False, False
+        if payload.get("eventId") != event_id or abs(time.time() - event_time) > 300:
+            return False, False
+        signatures = headers.get("webhook-signature", "").split()
+        signed_content = f"{event_id}.{timestamp}.".encode("ascii") + raw_body
+        with self._lock:
+            allowed = tuple(self._accepted_secrets)
+        valid = False
+        for secret in allowed:
+            key = base64.b64decode(secret.removeprefix("whsec_"), validate=True)
+            expected = "v1," + base64.b64encode(
+                hmac.new(key, signed_content, hashlib.sha256).digest()
+            ).decode("ascii")
+            valid = valid or any(
+                hmac.compare_digest(candidate, expected) for candidate in signatures
+            )
+        with self._lock:
+            duplicate = event_id in self._seen_ids
+            if valid:
+                self._seen_ids.add(event_id)
+        return valid, duplicate
+
+
+@pytest.fixture
+def https_webhook_receiver(monkeypatch, controlled_origin_certificate):
+    certificate, private_key = controlled_origin_certificate
+    receiver = ControlledWebhookReceiver(str(certificate), str(private_key))
+    original_getaddrinfo = socket.getaddrinfo
+    original_create_connection = socket.create_connection
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        if host == TEST_WEBHOOK_HOST:
+            return [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    (TEST_SOURCE_IP, port),
+                )
+            ]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+
+    def create_connection(
+        address,
+        timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+        source_address=None,
+    ):
+        host, port = address[:2]
+        if host == TEST_SOURCE_IP:
+            host = "127.0.0.1"
+        return original_create_connection((host, port), timeout, source_address)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    try:
+        yield receiver
+    finally:
+        receiver.close()

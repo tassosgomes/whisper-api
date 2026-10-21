@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from app.access.models import Account, Credential
+from app.access.models import Account, AdministrativeAudit, Credential
 
 
 INITIAL_PERMISSIONS = ("transcriptions:create", "transcriptions:read")
@@ -22,6 +22,18 @@ KEY_PREFIX = "wsk_"
 
 class CredentialNotFound(LookupError):
     """Raised when an operator refers to an unknown credential or account."""
+
+
+class AccountNameRequired(ValueError):
+    """An account must have a nonblank name."""
+
+
+class CredentialRevoked(ValueError):
+    """A revoked credential cannot be rotated or reactivated."""
+
+
+class ReasonRequired(ValueError):
+    """An audited revocation requires a nonblank reason."""
 
 
 @dataclass(frozen=True)
@@ -36,6 +48,80 @@ class CredentialStore:
 
     def __init__(self, engine: Engine):
         self._sessions = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def create_account(self, name: str) -> dict:
+        name = name.strip()
+        if not name:
+            raise AccountNameRequired("A conta precisa de um nome.")
+        with self._sessions.begin() as session:
+            account = Account(id=uuid4(), name=name)
+            session.add(account)
+            session.flush()
+            session.add(
+                AdministrativeAudit(
+                    actor="operational_credential",
+                    account_id=account.id,
+                    action="account_created",
+                    object_type="account",
+                    object_id=str(account.id),
+                )
+            )
+            session.flush()
+            return self._account_metadata(account, 0)
+
+    def list_accounts(self, page: int = 1, size: int = 10) -> dict:
+        with self._sessions() as session:
+            total = session.scalar(select(func.count()).select_from(Account))
+            rows = session.execute(
+                self._account_query()
+                .order_by(Account.name, Account.id)
+                .offset((page - 1) * size)
+                .limit(size)
+            ).all()
+            return {
+                "data": [
+                    self._account_metadata(account, count) for account, count in rows
+                ],
+                "pagination": {
+                    "page": page,
+                    "size": size,
+                    "total": total,
+                    "totalPages": (total + size - 1) // size,
+                },
+            }
+
+    def get_account(self, account_id: UUID) -> dict:
+        with self._sessions() as session:
+            row = session.execute(
+                self._account_query().where(Account.id == account_id)
+            ).one_or_none()
+            if row is None:
+                raise CredentialNotFound("Conta não encontrada.")
+            return self._account_metadata(*row)
+
+    @staticmethod
+    def _account_query():
+        credential_count = (
+            select(func.count(Credential.id))
+            .where(Credential.account_id == Account.id)
+            .correlate(Account)
+            .scalar_subquery()
+        )
+        return select(Account, credential_count)
+
+    @staticmethod
+    def _account_metadata(account: Account, credential_count: int) -> dict:
+        return {
+            "accountId": str(account.id),
+            "name": account.name,
+            "credentialCount": credential_count,
+            "webhookDestination": {
+                "configured": account.webhook_url is not None,
+                "active": account.webhook_url is not None
+                and account.webhook_disabled_at is None,
+                "url": account.webhook_url,
+            },
+        }
 
     def provision_account(self, account_name: str) -> tuple[dict, str]:
         account_id = uuid4()
@@ -53,7 +139,9 @@ class CredentialStore:
             session.flush()
             return self._metadata(account, credential), api_key
 
-    def issue_for_account(self, account_id: UUID) -> tuple[dict, str]:
+    def issue_for_account(
+        self, account_id: UUID, *, audit: bool = False
+    ) -> tuple[dict, str]:
         credential_id = uuid4()
         api_key = self._new_key(credential_id)
         with self._sessions.begin() as session:
@@ -68,9 +156,47 @@ class CredentialStore:
             )
             session.add(credential)
             session.flush()
+            if audit:
+                session.add(
+                    AdministrativeAudit(
+                        actor="operational_credential",
+                        account_id=account_id,
+                        action="credential_issued",
+                        object_type="credential",
+                        object_id=str(credential_id),
+                    )
+                )
+                session.flush()
             return self._metadata(account, credential), api_key
 
-    def rotate(self, credential_id: UUID) -> tuple[dict, str]:
+    def list_credentials(self, account_id: UUID, page: int = 1, size: int = 10) -> dict:
+        with self._sessions() as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                raise CredentialNotFound("Conta não encontrada.")
+            total = session.scalar(
+                select(func.count(Credential.id)).where(
+                    Credential.account_id == account_id
+                )
+            )
+            credentials = session.scalars(
+                select(Credential)
+                .where(Credential.account_id == account_id)
+                .order_by(Credential.created_at, Credential.id)
+                .offset((page - 1) * size)
+                .limit(size)
+            ).all()
+            return {
+                "data": [self._metadata(account, item) for item in credentials],
+                "pagination": {
+                    "page": page,
+                    "size": size,
+                    "total": total,
+                    "totalPages": (total + size - 1) // size,
+                },
+            }
+
+    def rotate(self, credential_id: UUID, *, audit: bool = False) -> tuple[dict, str]:
         api_key = self._new_key(credential_id)
         with self._sessions.begin() as session:
             credential = session.execute(
@@ -80,14 +206,31 @@ class CredentialStore:
             ).scalar_one_or_none()
             if credential is None:
                 raise CredentialNotFound("Credencial não encontrada.")
+            if credential.revoked_at is not None:
+                raise CredentialRevoked("Uma credencial revogada não é rotacionada.")
             account = session.get(Account, credential.account_id)
             credential.key_hash = self._key_hash(api_key)
             credential.rotated_at = datetime.now(timezone.utc)
-            credential.revoked_at = None
             session.flush()
+            if audit:
+                session.add(
+                    AdministrativeAudit(
+                        actor="operational_credential",
+                        account_id=credential.account_id,
+                        action="credential_rotated",
+                        object_type="credential",
+                        object_id=str(credential_id),
+                    )
+                )
+                session.flush()
             return self._metadata(account, credential), api_key
 
-    def revoke(self, credential_id: UUID) -> dict:
+    def revoke(
+        self, credential_id: UUID, *, reason: str | None = None, audit: bool = False
+    ) -> dict:
+        reason = reason.strip() if reason is not None else None
+        if audit and not reason:
+            raise ReasonRequired("Informe o motivo antes de confirmar.")
         with self._sessions.begin() as session:
             credential = session.execute(
                 select(Credential)
@@ -100,6 +243,18 @@ class CredentialStore:
             if credential.revoked_at is None:
                 credential.revoked_at = datetime.now(timezone.utc)
             session.flush()
+            if audit:
+                session.add(
+                    AdministrativeAudit(
+                        actor="operational_credential",
+                        account_id=credential.account_id,
+                        action="credential_revoked",
+                        object_type="credential",
+                        object_id=str(credential_id),
+                        reason=reason,
+                    )
+                )
+                session.flush()
             return self._metadata(account, credential)
 
     def metadata(self, credential_id: UUID) -> dict:
@@ -166,6 +321,7 @@ class CredentialStore:
             "credentialId": str(credential.id),
             "createdAt": _isoformat(credential.created_at),
             "permissions": list(credential.permissions),
+            "status": "revoked" if credential.revoked_at is not None else "active",
             "lastUsedAt": _isoformat(credential.last_used_at),
             "rotatedAt": _isoformat(credential.rotated_at),
             "revokedAt": _isoformat(credential.revoked_at),

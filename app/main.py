@@ -6,12 +6,21 @@ import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated, Literal
+from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, StringConstraints
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.access.credentials import CredentialStore
+from app.access.credentials import (
+    AccountNameRequired,
+    CredentialNotFound,
+    CredentialRevoked,
+    CredentialStore,
+)
 from app.api.transcriptions import router
 from app.database import create_database_engine, database_url_from_env, upgrade_database
 from app.jobs.executor import JobManager
@@ -19,10 +28,21 @@ from app.jobs.security import SourceURLCipher
 from app.jobs.worker import JobWorker
 from app.jobs.webhooks import (
     NotificationDispatcher,
+    WebhookAccountNotFound,
+    WebhookConfigStore,
+    WebhookConfigurationError,
+    WebhookDestinationNotFound,
+    WebhookDestinationRejected,
     WebhookHTTPTransport,
     WebhookSecretCipher,
 )
 from app.monitoring.metrics import DownloadStartMetrics, JobProcessingMetrics
+from app.operator import (
+    is_operator_contract_path,
+    is_operator_session_valid,
+    router as operator_router,
+    unauthorized_operator_response,
+)
 from app.storage.s3 import S3ObjectStore
 from app.transcription.paths import TrustedDestinations
 from app.transcription.source import SourceConnector
@@ -41,6 +61,8 @@ class Settings:
     DATABASE_URL: str
     SOURCE_URL_ENCRYPTION_KEY: str
     WEBHOOK_SECRET_ENCRYPTION_KEY: str | None
+    OPERATOR_SECRET: str | None
+    OPERATOR_COOKIE_SECURE: bool
     ROLE: str
     S3_BUCKET: str
     S3_REGION: str
@@ -64,6 +86,11 @@ class Settings:
             SOURCE_URL_ENCRYPTION_KEY=os.getenv("SOURCE_URL_ENCRYPTION_KEY", ""),
             WEBHOOK_SECRET_ENCRYPTION_KEY=os.getenv("WEBHOOK_SECRET_ENCRYPTION_KEY")
             or None,
+            OPERATOR_SECRET=os.getenv("OPERATOR_SECRET") or None,
+            OPERATOR_COOKIE_SECURE=os.getenv("OPERATOR_COOKIE_SECURE", "true")
+            .strip()
+            .casefold()
+            not in {"false", "0", "no"},
             ROLE=os.getenv("APP_ROLE", "api").casefold(),
             S3_BUCKET=os.getenv("S3_BUCKET", "whisper-temporary"),
             S3_REGION=os.getenv("S3_REGION", "us-east-1"),
@@ -94,6 +121,8 @@ class Settings:
 async def lifespan(application: FastAPI):
     settings = Settings.from_env()
     application.state.settings = settings
+    application.state.operator_secret = settings.OPERATOR_SECRET
+    application.state.operator_sessions = {}
     database_engine = create_database_engine(settings.DATABASE_URL)
     try:
         upgrade_database(database_engine)
@@ -107,6 +136,11 @@ async def lifespan(application: FastAPI):
             settings.WEBHOOK_SECRET_ENCRYPTION_KEY
         )
         application.state.webhook_secret_cipher = webhook_secret_cipher
+        application.state.webhook_config_store = WebhookConfigStore(
+            database_engine,
+            webhook_secret_cipher,
+            settings.TRUSTED_PRIVATE_WEBHOOKS,
+        )
         application.state.notification_dispatcher = NotificationDispatcher(
             database_engine,
             webhook_secret_cipher,
@@ -155,6 +189,7 @@ async def lifespan(application: FastAPI):
             application.state.model_loaded = True
         yield
     finally:
+        application.state.operator_sessions.clear()
         application.state.model_loaded = False
         worker = getattr(application.state, "worker", None)
         if worker is not None:
@@ -166,6 +201,15 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(title="Meeting Transcriber PoC", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_operator_session(request: Request, call_next):
+    if is_operator_contract_path(request.url.path) and not is_operator_session_valid(
+        request
+    ):
+        return unauthorized_operator_response(request.url.path)
+    return await call_next(request)
 
 
 @app.exception_handler(HTTPException)
@@ -259,6 +303,378 @@ async def request_validation_to_problem(
 
 
 app.include_router(router)
+app.include_router(operator_router)
+
+
+@app.get("/v1/queue", operation_id="getQueue")
+def get_queue(request: Request, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.jobs.get_queue()
+
+
+@app.get("/v1/delivery-attempts", operation_id="listDeliveryAttempts")
+def list_delivery_attempts(
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+    accountId: UUID | None = None,
+    jobId: str | None = None,
+    willRetry: bool | None = None,
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.webhook_config_store.list_delivery_attempts(
+        page, size, account_id=accountId, job_id=jobId, will_retry=willRetry
+    )
+
+
+@app.get("/v1/jobs", operation_id="listOperationalJobs")
+def list_operational_jobs(
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+    accountId: UUID | None = None,
+    state: Literal["downloading", "queued", "processing", "completed", "failed"]
+    | None = None,
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.jobs.list_operational_jobs(
+        page, size, account_id=accountId, state=state
+    )
+
+
+@app.get("/v1/jobs/{jobId}", operation_id="getOperationalJob")
+def get_operational_job(jobId: str, request: Request, response: Response) -> dict:
+    job = request.app.state.jobs.get_operational_job(jobId)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    response.headers["Cache-Control"] = "no-store"
+    return job
+
+
+class CreateAccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
+
+
+@app.post(
+    "/v1/accounts", status_code=status.HTTP_201_CREATED, operation_id="createAccount"
+)
+def create_account(
+    payload: CreateAccountRequest, request: Request, response: Response
+) -> dict:
+    try:
+        account = request.app.state.credential_store.create_account(payload.name)
+    except AccountNameRequired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Nome obrigatório",
+                "code": "ACCOUNT_NAME_REQUIRED",
+                "detail": "A conta precisa de um nome que a distinga das demais.",
+            },
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Location"] = f"/v1/accounts/{account['accountId']}"
+    response.headers["Cache-Control"] = "no-store"
+    return account
+
+
+@app.get("/v1/accounts", operation_id="listAccounts")
+def list_accounts(
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.credential_store.list_accounts(page, size)
+
+
+@app.get("/v1/accounts/{accountId}", operation_id="getAccount")
+def get_account(accountId: UUID, request: Request, response: Response) -> dict:
+    try:
+        account = request.app.state.credential_store.get_account(accountId)
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return account
+
+
+@app.post(
+    "/v1/accounts/{accountId}/credentials",
+    status_code=status.HTTP_201_CREATED,
+    operation_id="issueCredential",
+)
+def issue_credential(accountId: UUID, request: Request, response: Response) -> dict:
+    try:
+        credential, api_key = request.app.state.credential_store.issue_for_account(
+            accountId, audit=True
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Location"] = f"/v1/credentials/{credential['credentialId']}"
+    response.headers["Cache-Control"] = "no-store"
+    return {**credential, "apiKey": api_key}
+
+
+@app.get("/v1/accounts/{accountId}/credentials", operation_id="listCredentials")
+def list_credentials(
+    accountId: UUID,
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+) -> dict:
+    try:
+        credentials = request.app.state.credential_store.list_credentials(
+            accountId, page, size
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return credentials
+
+
+@app.get("/v1/credentials/{credentialId}", operation_id="getCredential")
+def get_credential(credentialId: UUID, request: Request, response: Response) -> dict:
+    try:
+        credential = request.app.state.credential_store.metadata(credentialId)
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return credential
+
+
+@app.post("/v1/credentials/{credentialId}/rotate", operation_id="rotateCredential")
+def rotate_credential(credentialId: UUID, request: Request, response: Response) -> dict:
+    try:
+        credential, api_key = request.app.state.credential_store.rotate(
+            credentialId, audit=True
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except CredentialRevoked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "title": "Credencial revogada",
+                "code": "CREDENTIAL_REVOKED",
+                "detail": "Uma credencial revogada não é rotacionada.",
+            },
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return {**credential, "apiKey": api_key}
+
+
+class ReasonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Annotated[str, StringConstraints(strip_whitespace=True)] | None = None
+
+
+@app.post("/v1/credentials/{credentialId}/revoke", operation_id="revokeCredential")
+def revoke_credential(
+    credentialId: UUID,
+    request: Request,
+    response: Response,
+    payload: ReasonRequest | None = Body(None),
+) -> dict:
+    if payload is None or not payload.reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Motivo obrigatório",
+                "code": "REASON_REQUIRED",
+                "detail": "Informe o motivo antes de confirmar.",
+            },
+        )
+    try:
+        credential = request.app.state.credential_store.revoke(
+            credentialId, reason=payload.reason, audit=True
+        )
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return credential
+
+
+class PutWebhookDestinationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+
+
+@app.get(
+    "/v1/accounts/{accountId}/webhook-destination",
+    operation_id="getWebhookDestination",
+)
+def get_webhook_destination(
+    accountId: UUID, request: Request, response: Response
+) -> dict:
+    try:
+        destination = request.app.state.webhook_config_store.get_destination(accountId)
+    except WebhookAccountNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except WebhookDestinationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "DESTINATION_NOT_FOUND",
+                "detail": "Não há destino de webhook para esta conta.",
+            },
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return destination
+
+
+@app.put(
+    "/v1/accounts/{accountId}/webhook-destination",
+    operation_id="putWebhookDestination",
+)
+def put_webhook_destination(
+    accountId: UUID,
+    payload: PutWebhookDestinationRequest,
+    request: Request,
+    response: Response,
+) -> dict:
+    try:
+        destination = request.app.state.webhook_config_store.put_destination(
+            accountId, payload.url
+        )
+    except WebhookAccountNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except WebhookDestinationRejected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Destino recusado",
+                "code": "DESTINATION_REJECTED",
+                "detail": "O endereço não atende o critério do piloto, inclusive a allowlist da ADR-003.",
+            },
+        ) from exc
+    except (SQLAlchemyError, WebhookConfigurationError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    if "verificationMaterial" in destination:
+        response.status_code = status.HTTP_201_CREATED
+        response.headers["Location"] = request.url.path
+    response.headers["Cache-Control"] = "no-store"
+    return destination
+
+
+class RotateWebhookMaterialRequest(ReasonRequest):
+    mode: Literal["planned", "immediate"]
+
+
+@app.post(
+    "/v1/accounts/{accountId}/webhook-destination/rotate",
+    operation_id="rotateWebhookMaterial",
+)
+def rotate_webhook_material(
+    accountId: UUID,
+    payload: RotateWebhookMaterialRequest,
+    request: Request,
+    response: Response,
+) -> dict:
+    if payload.mode == "immediate" and not payload.reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Motivo obrigatório",
+                "code": "REASON_REQUIRED",
+                "detail": "Informe o motivo antes de confirmar.",
+            },
+        )
+    try:
+        destination = request.app.state.webhook_config_store.rotate_material(
+            accountId, immediate=payload.mode == "immediate", reason=payload.reason
+        )
+    except WebhookAccountNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except WebhookDestinationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "DESTINATION_NOT_FOUND",
+                "detail": "Não há destino de webhook para rotacionar.",
+            },
+        ) from exc
+    except (SQLAlchemyError, WebhookConfigurationError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return destination
+
+
+@app.post(
+    "/v1/accounts/{accountId}/webhook-destination/deactivate",
+    operation_id="deactivateWebhookDestination",
+)
+def deactivate_webhook_destination(
+    accountId: UUID,
+    request: Request,
+    response: Response,
+    payload: ReasonRequest | None = Body(None),
+) -> dict:
+    if payload is None or not payload.reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Motivo obrigatório",
+                "code": "REASON_REQUIRED",
+                "detail": "Informe o motivo antes de confirmar.",
+            },
+        )
+    try:
+        destination = request.app.state.webhook_config_store.deactivate_destination(
+            accountId, payload.reason
+        )
+    except (WebhookAccountNotFound, WebhookDestinationNotFound) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except (SQLAlchemyError, WebhookConfigurationError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return destination
 
 
 @app.get("/metrics")

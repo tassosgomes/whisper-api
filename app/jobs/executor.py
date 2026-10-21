@@ -9,13 +9,18 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
+from app.access.models import Account
 from app.jobs.models import IdempotencyRecord, TranscriptionJob
-from app.jobs.retention import is_terminal_expired
+from app.jobs.retention import (
+    TERMINAL_RETENTION,
+    TERMINAL_STATUSES,
+    is_terminal_expired,
+)
 from app.jobs.security import SourceURLCipher
 from app.monitoring.metrics import DownloadStartMetrics
 from app.transcription.paths import InvalidSourceURL
@@ -277,6 +282,52 @@ class JobManager:
                 return None
             return self._source_url_cipher.decrypt(job.id, job.source_url_encrypted)
 
+    def get_queue(self) -> dict:
+        """Observe accepted work across accounts without loading job content."""
+        with self._sessions() as session:
+            size, oldest = session.execute(
+                select(func.count(), func.min(TranscriptionJob.accepted_at)).where(
+                    TranscriptionJob.accepted_at.is_not(None),
+                    TranscriptionJob.status.not_in(TERMINAL_STATUSES),
+                )
+            ).one()
+            return {
+                "size": size,
+                "oldestAcceptedAt": _isoformat(oldest) if oldest else None,
+            }
+
+    def list_operational_jobs(
+        self, page: int, size: int, *, account_id=None, state: str | None = None
+    ) -> dict:
+        query = _operational_jobs_query(_utc_now())
+        if account_id is not None:
+            query = query.where(TranscriptionJob.account_id == account_id)
+        if state is not None:
+            query = query.where(TranscriptionJob.status == state)
+        with self._sessions() as session:
+            total = session.scalar(select(func.count()).select_from(query.subquery()))
+            rows = session.execute(
+                query.order_by(TranscriptionJob.accepted_at.desc(), TranscriptionJob.id)
+                .offset((page - 1) * size)
+                .limit(size)
+            ).all()
+            return {
+                "data": [_operational_job(row) for row in rows],
+                "pagination": {
+                    "page": page,
+                    "size": size,
+                    "total": total,
+                    "totalPages": (total + size - 1) // size,
+                },
+            }
+
+    def get_operational_job(self, job_id: str) -> dict | None:
+        with self._sessions() as session:
+            row = session.execute(
+                _operational_jobs_query(_utc_now()).where(TranscriptionJob.id == job_id)
+            ).one_or_none()
+            return _operational_job(row) if row is not None else None
+
     def shutdown(self) -> None:
         """Wait for source connection tasks to stop before disposing the engine."""
         self._download_executor.shutdown(wait=True)
@@ -292,6 +343,47 @@ def _utc_now() -> datetime:
 
 def _isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _operational_jobs_query(now: datetime):
+    # Select only contract fields. A reservation awaiting source admission has
+    # no acceptance time yet and is not an accepted operational job.
+    return (
+        select(
+            TranscriptionJob.id,
+            TranscriptionJob.account_id,
+            Account.name.label("account_name"),
+            TranscriptionJob.credential_id,
+            TranscriptionJob.status,
+            TranscriptionJob.accepted_at,
+            TranscriptionJob.terminal_at,
+            TranscriptionJob.client_reference,
+        )
+        .join(Account, Account.id == TranscriptionJob.account_id)
+        .where(
+            TranscriptionJob.accepted_at.is_not(None),
+            or_(
+                TranscriptionJob.status.not_in(TERMINAL_STATUSES),
+                TranscriptionJob.terminal_at > now - TERMINAL_RETENTION,
+            ),
+        )
+    )
+
+
+def _operational_job(row) -> dict:
+    result = {
+        "jobId": row.id,
+        "accountId": str(row.account_id),
+        "accountName": row.account_name,
+        "credentialId": str(row.credential_id),
+        "state": row.status,
+        "acceptedAt": _isoformat(row.accepted_at),
+    }
+    if row.terminal_at is not None:
+        result["terminalAt"] = _isoformat(row.terminal_at)
+    if row.client_reference is not None:
+        result["clientReference"] = row.client_reference
+    return result
 
 
 def _public_job(job: TranscriptionJob) -> dict:
