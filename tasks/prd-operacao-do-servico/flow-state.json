@@ -4,31 +4,30 @@
   "original_base_ref": "b5201bb428532539c69efc889cb9d76460bb20b9",
   "base_ref": "2dfdb94d0660c9e263d510ce11ce642b11a47458",
   "target_ref": "2dfdb94d0660c9e263d510ce11ce642b11a47458",
-  "last_checkpoint": "62480e895f80f005d56ba16ffae8b8c1c68dc21a",
+  "last_checkpoint": "f728b0bfc83fe1edbfd6c749917c797702fe4436",
   "phase": "complete",
   "active_task": null,
   "attempt": 1,
   "max_attempts": 3,
-  "full_attempt": 1,
+  "full_attempt": 2,
   "transport_retries": 0,
   "transport": "herdr",
   "specs": [
     "techspec.md"
   ],
   "delivery": "pr",
-  "validated_commit": "62480e895f80f005d56ba16ffae8b8c1c68dc21a",
-  "validated_tree": "57a0e6ab575f04a753565618dfd82eb58e986d64",
+  "validated_commit": "f728b0bfc83fe1edbfd6c749917c797702fe4436",
+  "validated_tree": "c7c8a15f5cb8fe6dd49f82816eb7e8703754b776",
   "pending_delegation": {
     "role": "integrator",
     "mode": "complete-prd",
     "delivery": "pr"
   },
   "last_result": {
-    "run_id": "run.DAJBFEBn",
+    "run_id": "run.CF83hiwr",
     "role": "validator",
-    "mode": "full",
     "outcome": "approved",
-    "report": "prd_review.md"
+    "task": "1.0"
   },
   "history": [
     {
@@ -119,6 +118,28 @@
       "event": "full_approved",
       "run_id": "run.DAJBFEBn",
       "commit": "62480e895f80f005d56ba16ffae8b8c1c68dc21a"
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "external_rejection",
+      "source": "SonarCloud Quality Gate PR #5",
+      "rule": "python:S2092",
+      "file": "app/operator.py:92",
+      "task": "1.0"
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "1.0",
+      "commit": "f728b0bfc83fe1edbfd6c749917c797702fe4436",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "full_approved",
+      "run_id": "run.ZIItYu5z",
+      "commit": "f728b0bfc83fe1edbfd6c749917c797702fe4436",
+      "round": 2
     }
   ]
 }
