@@ -18,7 +18,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from app.jobs.models import TranscriptionJob
+from app.jobs.models import TranscriptionJob, TranscriptionUpload
 from app.jobs.retention import (
     RETENTION_SCAN_INTERVAL_SECONDS,
     TERMINAL_RETENTION,
@@ -26,6 +26,7 @@ from app.jobs.retention import (
     delay_until_next_scan,
 )
 from app.jobs.security import SourceURLCipher
+from app.jobs.uploads import UPLOAD_RETENTION
 from app.jobs.webhooks import NotificationDispatcher, persist_terminal_event
 from app.monitoring.metrics import JobProcessingMetrics, ResourceSampler
 from app.service import public_result_payload
@@ -286,13 +287,31 @@ class JobWorker:
                 self._record_retention_failure(exc)
 
         try:
-            did_work = self._purge_orphan_objects() or did_work
+            with self._sessions.begin() as session:
+                deleted = session.execute(
+                    delete(TranscriptionUpload).where(
+                        TranscriptionUpload.job_id.is_(None),
+                        or_(
+                            (TranscriptionUpload.status == "pending")
+                            & (TranscriptionUpload.expires_at <= now),
+                            (TranscriptionUpload.status == "rejected")
+                            & (
+                                TranscriptionUpload.updated_at <= now - UPLOAD_RETENTION
+                            ),
+                        ),
+                    )
+                ).rowcount
+            did_work = bool(deleted) or did_work
+        except Exception as exc:
+            self._record_retention_failure(exc)
+        try:
+            did_work = self._purge_orphan_objects(now) or did_work
         except Exception as exc:
             self._record_retention_failure(exc)
         self._metrics.increment("retentionCleanupRuns")
         return did_work
 
-    def _purge_orphan_objects(self) -> bool:
+    def _purge_orphan_objects(self, now: datetime) -> bool:
         with self._sessions() as session:
             rows = session.execute(
                 select(
@@ -325,6 +344,35 @@ class JobWorker:
                     did_work = True
                 except Exception as exc:
                     self._record_retention_failure(exc)
+        for key in self._object_store.list_keys("uploads/", include_versions=True):
+            try:
+                # Complete locks this reservation before referencing the object
+                # from a job. Recheck live references under the same lock.
+                with self._sessions.begin() as session:
+                    upload = session.scalar(
+                        select(TranscriptionUpload)
+                        .where(TranscriptionUpload.object_key == key)
+                        .with_for_update()
+                    )
+                    referenced = session.scalar(
+                        select(TranscriptionJob.id).where(
+                            or_(
+                                TranscriptionJob.media_object_key == key,
+                                TranscriptionJob.result_object_key == key,
+                            )
+                        )
+                    )
+                    if referenced is not None or (
+                        upload is not None
+                        and upload.status == "pending"
+                        and upload.expires_at > now
+                    ):
+                        continue
+                    self._object_store.delete(key)
+                self._metrics.increment("orphanObjectsPurged")
+                did_work = True
+            except Exception as exc:
+                self._record_retention_failure(exc)
         return did_work
 
     def earliest_retention_terminal_at(self) -> datetime | None:
@@ -352,11 +400,28 @@ class JobWorker:
         current = now if now is not None else _utc_now()
         try:
             earliest = self.earliest_retention_terminal_at()
+            with self._sessions() as session:
+                pending = session.scalar(
+                    select(func.min(TranscriptionUpload.expires_at)).where(
+                        TranscriptionUpload.status == "pending",
+                        TranscriptionUpload.job_id.is_(None),
+                    )
+                )
+                rejected = session.scalar(
+                    select(func.min(TranscriptionUpload.updated_at)).where(
+                        TranscriptionUpload.status == "rejected",
+                        TranscriptionUpload.job_id.is_(None),
+                    )
+                )
         except Exception:
             return float(RETENTION_SCAN_INTERVAL_SECONDS)
-        if earliest is None:
-            return float(RETENTION_SCAN_INTERVAL_SECONDS)
-        return delay_until_next_scan(current, earliest)
+        delay = delay_until_next_scan(current, earliest)
+        for expiry in (pending, rejected + UPLOAD_RETENTION if rejected else None):
+            if expiry is not None:
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                delay = min(delay, max(0.0, (expiry - current).total_seconds()))
+        return delay
 
     def _record_retention_failure(self, exc: Exception) -> None:
         self._metrics.observe_failure("retention", "cleanup_failed")

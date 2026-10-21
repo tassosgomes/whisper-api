@@ -168,7 +168,7 @@ class S3ObjectStore:
         if targets:
             for index in range(0, len(targets), 1000):
                 chunk = targets[index : index + 1000]
-                self.client.delete_objects(
+                response = self.client.delete_objects(
                     Bucket=self.bucket,
                     Delete={
                         "Objects": [
@@ -178,6 +178,11 @@ class S3ObjectStore:
                         "Quiet": True,
                     },
                 )
+                if response.get("Errors"):
+                    # S3 can report per-object failures inside an HTTP 200.
+                    raise ClientError(
+                        {"Error": {"Code": "ObjectDeletionFailed"}}, "DeleteObjects"
+                    )
             return
         self.client.delete_object(Bucket=self.bucket, Key=key)
 
@@ -254,13 +259,21 @@ class S3ObjectStore:
             )
         return policy
 
-    def list_keys(self, prefix: str) -> Iterator[str]:
-        paginator = self.client.get_paginator("list_objects_v2")
+    def list_keys(
+        self, prefix: str, *, include_versions: bool = False
+    ) -> Iterator[str]:
+        """List unique keys, including hidden versions when requested."""
+        operation = "list_object_versions" if include_versions else "list_objects_v2"
+        fields = ("Versions", "DeleteMarkers") if include_versions else ("Contents",)
+        paginator = self.client.get_paginator(operation)
+        seen: set[str] = set()
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
-            for item in page.get("Contents", []):
-                key = item.get("Key")
-                if key is not None:
-                    yield key
+            for field in fields:
+                for item in page.get(field, []):
+                    key = item.get("Key")
+                    if key is not None and key not in seen:
+                        seen.add(key)
+                        yield key
 
     def get_bytes(self, key: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=key)

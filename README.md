@@ -35,7 +35,7 @@ Registra apenas o envio e devolve uma URL para `PUT`; nenhum job é criado nesse
 pedido. Envie exatamente os cabeçalhos devolvidos, incluindo `Content-Length`
 e `x-amz-checksum-sha256`. A mesma chave e os mesmos valores devolvem o mesmo
 envio por 24 h; repetir o pedido renova a URL enquanto o envio estiver pendente.
-O endpoint de conclusão será disponibilizado na fatia seguinte.
+Após o `PUT`, chame o `completeUrl` devolvido para criar o job em `queued`.
 
 Configure `S3_PUBLIC_ENDPOINT_URL` com o endereço do armazenamento acessível
 ao cliente (HTTPS em produção). No Compose o padrão é `http://127.0.0.1:9000`;
@@ -68,6 +68,23 @@ as demais regras do bucket. Conforme ADR-001, versionamento deve permanecer
 desabilitado/suspenso e Object Lock ausente; a aplicação verifica esses dois
 últimos requisitos na inicialização. A política de `scripts/init_minio.sh` já
 permite `s3:PutObject` em `bucket/*`, incluindo o novo prefixo.
+O worker precisa também de `s3:ListBucketVersions` no bucket e
+`s3:DeleteObjectVersion` nos objetos para eliminar versões e marcadores de
+exclusão. A política local inclui essas permissões e as consultas de
+versionamento e Object Lock; reaplicá-la atualiza instalações existentes.
+
+O varredor do worker é a garantia principal: remove objetos abandonados ou
+recusados de `uploads/`, preserva envios pendentes durante 24 h desde o pedido
+e objetos referenciados por jobs. Remove também registros pendentes vencidos
+e recusados após 24 h da recusa. A regra de 2 dias é uma proteção independente
+para falhas do serviço; ela não substitui o expurgo da aplicação. Confira a
+regra e as políticas acima em cada ambiente antes do piloto (ADR-001).
+
+A idempotência de um envio concluído acompanha o job: até o expurgo, repetir
+o pedido devolve o mesmo envio/job. Ao remover o job, 24 h após o estado
+terminal, a cascata remove o envio e libera a chave para um novo pedido
+(`201`). Um envio pendente vencido já é inexistente para `complete` (`404`)
+e sua chave pode ser reutilizada, mesmo antes da próxima varredura.
 
 Para conferir a validação dos cabeçalhos assinados contra um MinIO local com
 bucket já criado (nunca use credenciais de produção):

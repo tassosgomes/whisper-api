@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [2.0]
 gate: ".venv/bin/pytest -q -k cap4_upload_retention"
@@ -47,8 +47,8 @@ O varredor da aplicação é a garantia principal; a regra de ciclo de vida do a
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k cap4_upload_retention`
-- [ ] Com o relógio controlado: envio pendente vencido some do bucket e do banco; envio pendente vigente é preservado; objeto de job em andamento é preservado.
-- [ ] Depois de 24 h do estado terminal, objeto, job e linha do envio sumiram e a mesma `Idempotency-Key` cria um envio novo.
-- [ ] Envio recusado há mais de 24 h é removido; antes disso a repetição ainda responde `409 UPLOAD_REJECTED`.
-- [ ] Nenhum log do teste contém URL de envio, chave ou nome de arquivo.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k cap4_upload_retention`
+- [x] Com o relógio controlado: envio pendente vencido some do bucket e do banco; envio pendente vigente é preservado; objeto de job em andamento é preservado.
+- [x] Depois de 24 h do estado terminal, objeto, job e linha do envio sumiram e a mesma `Idempotency-Key` cria um envio novo.
+- [x] Envio recusado há mais de 24 h é removido; antes disso a repetição ainda responde `409 UPLOAD_REJECTED`.
+- [x] Nenhum log do teste contém URL de envio, chave ou nome de arquivo.

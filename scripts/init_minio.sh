@@ -34,20 +34,20 @@ cat > "$policy_file" <<EOF
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketMultipartUploads"],
+      "Action": ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetBucketObjectLockConfiguration", "s3:ListBucket", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads"],
       "Resource": ["arn:aws:s3:::$S3_BUCKET"]
     },
     {
       "Effect": "Allow",
-      "Action": ["s3:AbortMultipartUpload", "s3:DeleteObject", "s3:GetObject", "s3:ListMultipartUploadParts", "s3:PutObject"],
+      "Action": ["s3:AbortMultipartUpload", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:GetObject", "s3:ListMultipartUploadParts", "s3:PutObject"],
       "Resource": ["arn:aws:s3:::$S3_BUCKET/*"]
     }
   ]
 }
 EOF
 
-mc admin policy info whisper whisper-bucket-access >/dev/null 2>&1 \
-  || mc admin policy create whisper whisper-bucket-access "$policy_file"
+# Reapply the managed policy so an existing installation gains purge permissions.
+mc admin policy create whisper whisper-bucket-access "$policy_file"
 mc admin user info whisper "$S3_ACCESS_KEY_ID" >/dev/null 2>&1 \
   || mc admin user add whisper "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY"
 mc admin policy attach whisper whisper-bucket-access --user "$S3_ACCESS_KEY_ID"
