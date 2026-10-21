@@ -23,6 +23,12 @@ from app.jobs.webhooks import (
     WebhookSecretCipher,
 )
 from app.monitoring.metrics import DownloadStartMetrics, JobProcessingMetrics
+from app.operator import (
+    is_operator_contract_path,
+    is_operator_session_valid,
+    router as operator_router,
+    unauthorized_operator_response,
+)
 from app.storage.s3 import S3ObjectStore
 from app.transcription.paths import TrustedDestinations
 from app.transcription.source import SourceConnector
@@ -41,6 +47,7 @@ class Settings:
     DATABASE_URL: str
     SOURCE_URL_ENCRYPTION_KEY: str
     WEBHOOK_SECRET_ENCRYPTION_KEY: str | None
+    OPERATOR_SECRET: str | None
     ROLE: str
     S3_BUCKET: str
     S3_REGION: str
@@ -64,6 +71,7 @@ class Settings:
             SOURCE_URL_ENCRYPTION_KEY=os.getenv("SOURCE_URL_ENCRYPTION_KEY", ""),
             WEBHOOK_SECRET_ENCRYPTION_KEY=os.getenv("WEBHOOK_SECRET_ENCRYPTION_KEY")
             or None,
+            OPERATOR_SECRET=os.getenv("OPERATOR_SECRET") or None,
             ROLE=os.getenv("APP_ROLE", "api").casefold(),
             S3_BUCKET=os.getenv("S3_BUCKET", "whisper-temporary"),
             S3_REGION=os.getenv("S3_REGION", "us-east-1"),
@@ -94,6 +102,8 @@ class Settings:
 async def lifespan(application: FastAPI):
     settings = Settings.from_env()
     application.state.settings = settings
+    application.state.operator_secret = settings.OPERATOR_SECRET
+    application.state.operator_sessions = {}
     database_engine = create_database_engine(settings.DATABASE_URL)
     try:
         upgrade_database(database_engine)
@@ -155,6 +165,7 @@ async def lifespan(application: FastAPI):
             application.state.model_loaded = True
         yield
     finally:
+        application.state.operator_sessions.clear()
         application.state.model_loaded = False
         worker = getattr(application.state, "worker", None)
         if worker is not None:
@@ -166,6 +177,15 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(title="Meeting Transcriber PoC", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_operator_session(request: Request, call_next):
+    if is_operator_contract_path(request.url.path) and not is_operator_session_valid(
+        request
+    ):
+        return unauthorized_operator_response(request.url.path)
+    return await call_next(request)
 
 
 @app.exception_handler(HTTPException)
@@ -259,6 +279,7 @@ async def request_validation_to_problem(
 
 
 app.include_router(router)
+app.include_router(operator_router)
 
 
 @app.get("/metrics")

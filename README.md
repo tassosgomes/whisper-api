@@ -126,6 +126,7 @@ As variáveis do Compose podem ser definidas em `.env` ou no ambiente do comando
 | `POSTGRES_PASSWORD` | valor local de exemplo | Senha local PostgreSQL; substitua antes de qualquer implantação compartilhada |
 | `TEST_POSTGRES_DB`, `TEST_POSTGRES_USER`, `TEST_POSTGRES_PASSWORD` | valores locais de exemplo | Credenciais do banco de integração isolado |
 | `TEST_POSTGRES_PORT` | `55432` | Porta local do banco de integração isolado |
+| `OPERATOR_SECRET` | vazio | Credencial compartilhada do console operacional em `/operator` |
 | `TRUSTED_PRIVATE_SOURCES` | vazio | Allowlist de destinos privados aceitos como `sourceUrl` (e seus redirecionamentos); ver abaixo |
 | `TRUSTED_PRIVATE_WEBHOOKS` | vazio | Allowlist, independente da anterior, de destinos privados aceitos como URL de webhook; ver abaixo |
 
@@ -178,6 +179,21 @@ Depois de gravar as variáveis, reinicie a api e o worker. A conferência remota
 202 e o job chegando a `completed` — não faz parte deste checkout.
 
 Para selecionar outro modelo, confirme que ele foi preparado e ajuste `WHISPER_MODEL_NAME`. O caminho padrão acompanha esse nome. Se definir `WHISPER_MODEL_PATH` manualmente, aponte para o diretório correspondente.
+
+## Console operacional
+
+Configure `OPERATOR_SECRET` em `.env` para execução local ou injete o valor pelo
+gerenciador de segredos do deploy. Gere um valor forte, por exemplo com
+`openssl rand -hex 32`. Não grave o segredo no repositório, no README, em tickets
+ou em logs. Distribua-o somente aos operadores pelo canal seguro adotado pela
+equipe.
+
+A tela fica em `/operator` e as rotas administrativas em `/v1`. Configure o
+proxy reverso para encaminhar ambos os caminhos ao mesmo serviço `transcriber`;
+a sessão é mantida em memória pelo processo. Para rotacionar a credencial,
+substitua `OPERATOR_SECRET` no `.env` ou no gerenciador de segredos, recrie o
+serviço e distribua o novo valor pelo canal seguro. A troca invalida as sessões
+abertas. Se `OPERATOR_SECRET` estiver vazio ou ausente, nenhum login é aceito.
 
 ## Benchmark com a reunião real
 

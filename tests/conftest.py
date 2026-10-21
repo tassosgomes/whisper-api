@@ -28,6 +28,7 @@ from app.main import app
 
 TEST_SOURCE_URL_ENCRYPTION_KEY = "1a" * 32
 TEST_WEBHOOK_SECRET_ENCRYPTION_KEY = "2b" * 32
+TEST_OPERATOR_SECRET = "operator-test-secret-for-integration-tests"
 TEST_SOURCE_HOST = "media.example.test"
 TEST_WEBHOOK_HOST = "webhook.example.test"
 TEST_SOURCE_IP = "93.184.216.34"
@@ -272,6 +273,7 @@ def all_roles_client(
     monkeypatch.setenv(
         "WEBHOOK_SECRET_ENCRYPTION_KEY", TEST_WEBHOOK_SECRET_ENCRYPTION_KEY
     )
+    monkeypatch.setenv("OPERATOR_SECRET", TEST_OPERATOR_SECRET)
     monkeypatch.setenv("APP_ROLE", "all")
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")
@@ -320,6 +322,7 @@ def client(
     monkeypatch.setenv(
         "WEBHOOK_SECRET_ENCRYPTION_KEY", TEST_WEBHOOK_SECRET_ENCRYPTION_KEY
     )
+    monkeypatch.setenv("OPERATOR_SECRET", TEST_OPERATOR_SECRET)
     monkeypatch.setenv("APP_ROLE", "api")
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")

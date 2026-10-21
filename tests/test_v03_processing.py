@@ -121,9 +121,7 @@ def test_v03_processing_downloads_to_private_s3_and_discards_source_url(client):
     assert origin.source_url not in json.dumps(state)
     stored = client.app.state.object_store.get_bytes(row["media_object_key"])
     assert stored == origin.body
-    assert (
-        client.app.state.download_metrics.snapshot()["downloadStartSecondsP95"] >= 0
-    )
+    assert client.app.state.download_metrics.snapshot()["downloadStartSecondsP95"] >= 0
 
 
 def test_v03_processing_retries_transient_http_and_respects_retry_after(client):
@@ -481,7 +479,9 @@ def test_v03_processing_real_api_worker_composition_reaches_terminal(
 
     state = _status(client, created["job"]["jobId"], created["api_key"])
     deadline = time.monotonic() + 30.0
-    while state["status"] not in {"completed", "failed"} and time.monotonic() < deadline:
+    while (
+        state["status"] not in {"completed", "failed"} and time.monotonic() < deadline
+    ):
         time.sleep(0.2)
         state = _status(client, created["job"]["jobId"], created["api_key"])
 
@@ -504,7 +504,9 @@ def test_v03_processing_local_load_measures_p95_for_ten_jobs(client):
     origin.body = _wav_bytes()
     transcriber = RecordingTranscriber([Segment(0.0, 1.0, " carga")])
 
-    created = [ _create(client, origin.url_for(f"/load-{index}.wav")) for index in range(10) ]
+    created = [
+        _create(client, origin.url_for(f"/load-{index}.wav")) for index in range(10)
+    ]
     worker = _worker(client, transcriber)
     for _ in range(10):
         assert worker.run_download_once() is True
