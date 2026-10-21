@@ -116,14 +116,211 @@ def close_operator_session(request: Request) -> Response:
     return response
 
 
-_LOGIN_PAGE = """<!doctype html>
+_PAGE_STYLE = """  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-muted: #f8fafc;
+      --border: #dde3ea;
+      --text: #1b2430;
+      --text-muted: #5b6878;
+      --primary: #2357c6;
+      --primary-hover: #1b47a6;
+      --primary-text: #ffffff;
+      --danger: #c0352b;
+      --danger-soft: #fdecea;
+      --success: #1f7a4d;
+      --warning-soft: #fff6e0;
+      --warning-border: #e8b84a;
+      --focus: rgba(35, 87, 198, 0.35);
+      --radius: 8px;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f141a;
+        --surface: #171d25;
+        --surface-muted: #1d2530;
+        --border: #2c3644;
+        --text: #e6ebf1;
+        --text-muted: #9aa7b6;
+        --primary: #5b8def;
+        --primary-hover: #7aa3f3;
+        --primary-text: #0f141a;
+        --danger: #ef7468;
+        --danger-soft: #3a1d1b;
+        --success: #5cc493;
+        --warning-soft: #33290f;
+        --warning-border: #a7802a;
+        --focus: rgba(91, 141, 239, 0.45);
+        --shadow: none;
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 20px;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 16px 64px;
+    }
+    main > section { grid-column: 1 / -1; }
+    h1 { margin: 0; font-size: 1.5rem; font-weight: 650; letter-spacing: -0.01em; }
+    h2 {
+      margin: -20px -20px 16px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+    p { margin: 8px 0; }
+    label { display: block; margin: 12px 0 4px; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); }
+    input, select {
+      width: 100%;
+      max-width: 520px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+    }
+    input[readonly] { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--surface-muted); }
+    input:focus, select:focus, button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus); border-color: var(--primary); }
+    button {
+      display: inline-flex;
+      align-items: center;
+      margin: 8px 8px 0 0;
+      padding: 7px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.15s, border-color 0.15s;
+    }
+    button:hover:not(:disabled) { background: var(--surface-muted); border-color: var(--text-muted); }
+    button[type="submit"] { background: var(--primary); border-color: var(--primary); color: var(--primary-text); }
+    button[type="submit"]:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
+    #credential-revoke, #destination-deactivate { color: var(--danger); border-color: var(--danger); }
+    #credential-revoke:hover:not(:disabled), #destination-deactivate:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
+    #credential-revoke-confirm { background: var(--danger); border-color: var(--danger); color: #ffffff; }
+    #credential-revoke-confirm:hover:not(:disabled) { background: var(--danger); filter: brightness(0.92); }
+    button:disabled, fieldset:disabled button { opacity: 0.5; cursor: not-allowed; }
+    fieldset { margin: 16px 0 0; padding: 4px 16px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+    legend { padding: 0 6px; font-size: 0.85rem; font-weight: 600; }
+    form + p, fieldset + p { margin-top: 12px; }
+    ul { list-style: none; margin: 16px 0 0; padding: 0; }
+    ul:empty { display: none; }
+    li {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-bottom-width: 0;
+      overflow-wrap: anywhere;
+    }
+    li:first-child { border-radius: var(--radius) var(--radius) 0 0; }
+    li:last-child { border-bottom-width: 1px; border-radius: 0 0 var(--radius) var(--radius); }
+    li:only-child { border-radius: var(--radius); }
+    li:nth-child(even) { background: var(--surface-muted); }
+    li > button { margin: 0; }
+    nav { display: flex; align-items: center; gap: 12px; margin-top: 12px; color: var(--text-muted); font-size: 0.85rem; }
+    nav button { margin: 0; }
+    pre {
+      margin: 16px 0 0;
+      padding: 12px 14px;
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font: 0.82rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    pre:empty { display: none; }
+    [role="alert"] {
+      padding: 10px 12px;
+      border-left: 3px solid var(--danger);
+      border-radius: 4px;
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    [role="status"] { color: var(--success); }
+    [role="status"]:empty { display: none; }
+    #queue-summary { color: var(--text); font-size: 1rem; font-weight: 600; }
+    #credential-account, #destination-account, #delivery-context { color: var(--text-muted); }
+    #credential-secret, #destination-secret {
+      margin: 16px 0;
+      padding: 14px 16px;
+      border: 1px solid var(--warning-border);
+      border-radius: var(--radius);
+      background: var(--warning-soft);
+    }
+    #credential-secret > p:first-child, #destination-secret > p:first-child { margin-top: 0; font-weight: 600; }
+    #credential-revoke-form, #destination-reason-form {
+      margin-top: 12px;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-muted);
+    }
+    body.login main { grid-template-columns: 1fr; max-width: 420px; padding-top: 12vh; }
+    body.login h1 { text-align: center; }
+    #operator-login {
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    #operator-login label { margin-top: 0; }
+    #operator-login button { width: 100%; justify-content: center; margin: 16px 0 0; padding: 9px 14px; }
+    @media (max-width: 600px) {
+      main { padding-top: 20px; gap: 16px; }
+      section { padding: 16px; }
+      h2 { margin: -16px -16px 12px; padding: 12px 16px; }
+      li { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+"""
+
+
+def _with_style(page: str) -> str:
+    return page.replace("</head>", f"{_PAGE_STYLE}</head>", 1)
+
+
+_LOGIN_PAGE = _with_style(
+    """<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Console operacional</title>
 </head>
-<body>
+<body class="login">
   <main>
     <h1>Console operacional</h1>
     <form id="operator-login">
@@ -160,8 +357,10 @@ _LOGIN_PAGE = """<!doctype html>
   </script>
 </body>
 </html>"""
+)
 
-_CONSOLE_PAGE = """<!doctype html>
+_CONSOLE_PAGE = _with_style(
+    """<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
@@ -991,6 +1190,7 @@ _CONSOLE_PAGE = """<!doctype html>
   </script>
 </body>
 </html>"""
+)
 
 
 @router.get("/operator", response_class=HTMLResponse, include_in_schema=False)
