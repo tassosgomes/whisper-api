@@ -11,8 +11,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from app.access.models import Credential
-from app.jobs.executor import IdempotencyKeyReused
-from app.jobs.models import TranscriptionUpload
+from app.jobs.executor import IdempotencyKeyReused, _public_job, create_uploaded_job
+from app.jobs.models import TranscriptionJob, TranscriptionUpload
 from app.jobs.security import SourceURLCipher
 from app.storage.s3 import S3ObjectStore
 
@@ -36,6 +36,20 @@ class TooManyPendingUploads(ValueError):
     """Admission is bounded per credential, including concurrent requests."""
 
 
+class UploadNotFound(ValueError):
+    """An absent, expired or inaccessible upload has the same public response."""
+
+
+class UploadNotReceived(ValueError):
+    """No object is available yet; the pending upload can still be retried."""
+
+
+class UploadMismatch(ValueError):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 class UploadManager:
     def __init__(
         self,
@@ -51,6 +65,50 @@ class UploadManager:
         self._object_store = object_store
         self.url_ttl_seconds = url_ttl_seconds
         self.pending_limit = pending_limit
+
+    def complete(self, upload_id: str, *, account_id, credential_id) -> dict:
+        failure_code = None
+        with self._sessions.begin() as session:
+            record = session.execute(
+                select(TranscriptionUpload)
+                .where(
+                    TranscriptionUpload.id == upload_id,
+                    TranscriptionUpload.account_id == account_id,
+                    TranscriptionUpload.credential_id == credential_id,
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            now = datetime.now(timezone.utc)
+            if record is None or (
+                record.status != "completed" and record.expires_at <= now
+            ):
+                raise UploadNotFound
+            if record.status == "completed":
+                return _public_job(session.get(TranscriptionJob, record.job_id))
+            if record.status == "rejected":
+                failure_code = record.failure_code
+                # The still-valid PUT URL may have been used after rejection.
+                self._object_store.delete(record.object_key)
+            else:
+                stored = self._object_store.inspect_upload(record.object_key)
+                if stored is None:
+                    raise UploadNotReceived
+                if stored.size_bytes != record.size_bytes:
+                    failure_code = "UPLOAD_SIZE_MISMATCH"
+                elif stored.checksum_sha256 is None or not hmac.compare_digest(
+                    stored.checksum_sha256, record.checksum_sha256
+                ):
+                    failure_code = "UPLOAD_CHECKSUM_MISMATCH"
+                elif not _matches_format(record.content_type, stored.first_bytes):
+                    failure_code = "UNSUPPORTED_MEDIA_FORMAT"
+                if failure_code is None:
+                    return create_uploaded_job(session, record, now)
+                record.status = "rejected"
+                record.failure_code = failure_code
+                record.updated_at = now
+                self._object_store.delete(record.object_key)
+        # Raise after committing the durable refusal, so replay stays identical.
+        raise UploadMismatch(failure_code)
 
     def create_or_replay(
         self,
@@ -153,3 +211,24 @@ class UploadManager:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _matches_format(content_type: str, header: bytes) -> bool:
+    """Check container magic only; decoding and duration belong to the worker."""
+    if content_type == "audio/wav":
+        return header[:4] == b"RIFF" and header[8:12] == b"WAVE"
+    if content_type == "audio/mpeg":
+        return header.startswith(b"ID3") or (
+            len(header) >= 4
+            and header[0] == 0xFF
+            and header[1] & 0xE0 == 0xE0
+            and header[1] & 0x18 != 0x08
+            and header[1] & 0x06 != 0
+            and header[2] >> 4 not in (0, 15)
+            and header[2] & 0x0C != 0x0C
+        )
+    if content_type in {"audio/mp4", "video/mp4"}:
+        return len(header) >= 12 and header[4:8] == b"ftyp"
+    if content_type in {"video/webm", "video/x-matroska"}:
+        return header.startswith(b"\x1a\x45\xdf\xa3")
+    return False

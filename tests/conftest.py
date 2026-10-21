@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import socket
@@ -12,6 +13,7 @@ import ssl
 import subprocess
 import threading
 import time
+import wave
 from pathlib import Path
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -388,6 +390,22 @@ def client(
 def upload_credential(client):
     """A real credential with the app's isolated PostgreSQL and moto bucket."""
     return client.app.state.credential_store.provision_account("CAP-4 uploads")
+
+
+@pytest.fixture
+def upload_wav():
+    """Produce real, decodable PCM WAVs, including compact long-duration media."""
+
+    def build(seconds=1, *, sample_rate=8000):
+        target = io.BytesIO()
+        with wave.open(target, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(1)
+            audio.setframerate(sample_rate)
+            audio.writeframes(b"\x80" * (seconds * sample_rate))
+        return target.getvalue()
+
+    return build
 
 
 class ControlledWebhookReceiver:

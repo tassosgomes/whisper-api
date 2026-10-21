@@ -22,6 +22,9 @@ from app.jobs.executor import IdempotencyKeyReused
 from app.jobs.uploads import (
     CONTENT_TYPE_SUFFIXES,
     TooManyPendingUploads,
+    UploadMismatch,
+    UploadNotFound,
+    UploadNotReceived,
     UploadRejected,
 )
 from app.transcription.paths import InvalidSourceURL, validate_source_url_syntax
@@ -180,6 +183,44 @@ def _upload_problem(status_code: int, code: str, detail: str) -> HTTPException:
     return HTTPException(
         status_code=status_code, detail={"code": code, "detail": detail}
     )
+
+
+@router.post(
+    "/v1/transcription-uploads/{upload_id}/complete",
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="completeTranscriptionUpload",
+)
+def complete_transcription_upload(
+    upload_id: str,
+    request: Request,
+    response: Response,
+    credential: Annotated[AuthenticatedCredential, Depends(authenticate_api_key)],
+) -> dict:
+    try:
+        job = request.app.state.uploads.complete(
+            upload_id,
+            account_id=credential.account_id,
+            credential_id=credential.credential_id,
+        )
+    except UploadNotFound:
+        raise _upload_problem(404, "NOT_FOUND", "Envio não encontrado.") from None
+    except UploadNotReceived:
+        raise _upload_problem(
+            409, "UPLOAD_NOT_RECEIVED", "Arquivo ainda não recebido."
+        ) from None
+    except UploadMismatch as exc:
+        detail = {
+            "UPLOAD_SIZE_MISMATCH": "Tamanho diferente do declarado.",
+            "UPLOAD_CHECKSUM_MISMATCH": "Conteúdo diferente do declarado.",
+            "UNSUPPORTED_MEDIA_FORMAT": "Formato não suportado.",
+        }[exc.code]
+        raise _upload_problem(422, exc.code, detail) from None
+    response.headers["Location"] = job["statusUrl"]
+    return {
+        key: value
+        for key, value in job.items()
+        if key in {"jobId", "status", "createdAt", "statusUrl", "clientReference"}
+    }
 
 
 @router.post("/v1/transcriptions", status_code=status.HTTP_202_ACCEPTED)

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [1.0]
 gate: ".venv/bin/pytest -q -k cap4_upload_complete"
@@ -49,10 +49,10 @@ O objeto do envio é a mídia do job; não há cópia para `media/`. O worker e 
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k cap4_upload_complete`
-- [ ] Um teste ponta a ponta com áudio real curto cobre pedido, `PUT`, `complete`, acompanhamento até `completed` e leitura do resultado.
-- [ ] Um `.wav` informado como `.mp3` termina em `422 UNSUPPORTED_MEDIA_FORMAT` e o objeto some do bucket.
-- [ ] Um arquivo válido de mais de 2 h (sintético) termina o job em `failed/MEDIA_DURATION_LIMIT_EXCEEDED`.
-- [ ] Duas chamadas simultâneas a `complete` resultam em um único job.
-- [ ] Envio de outra credencial recebe `404` neutro; `complete` antes do `PUT` recebe `409 UPLOAD_NOT_RECEIVED` e funciona depois do `PUT`.
-- [ ] A métrica de aceite a terminal e a visão do operador funcionam para o job criado por envio direto.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k cap4_upload_complete`
+- [x] Um teste ponta a ponta com áudio real curto cobre pedido, `PUT`, `complete`, acompanhamento até `completed` e leitura do resultado.
+- [x] Um `.wav` informado como `.mp3` termina em `422 UNSUPPORTED_MEDIA_FORMAT` e o objeto some do bucket.
+- [x] Um arquivo válido de mais de 2 h (sintético) termina o job em `failed/MEDIA_DURATION_LIMIT_EXCEEDED`.
+- [x] Duas chamadas simultâneas a `complete` resultam em um único job.
+- [x] Envio de outra credencial recebe `404` neutro; `complete` antes do `PUT` recebe `409 UPLOAD_NOT_RECEIVED` e funciona depois do `PUT`.
+- [x] A métrica de aceite a terminal e a visão do operador funcionam para o job criado por envio direto.

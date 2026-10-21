@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+
+
+@dataclass(frozen=True)
+class UploadObject:
+    size_bytes: int
+    checksum_sha256: str | None
+    first_bytes: bytes
 
 
 class S3ObjectStore:
@@ -105,6 +113,36 @@ class S3ObjectStore:
     def download_media(self, key: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         self.client.download_file(self.bucket, key, str(destination))
+
+    def inspect_upload(self, key: str) -> UploadObject | None:
+        """Read the stored checksum and a bounded container signature, not the media."""
+        try:
+            head = self.client.head_object(
+                Bucket=self.bucket, Key=key, ChecksumMode="ENABLED"
+            )
+            first_bytes = b""
+            if head["ContentLength"]:
+                response = self.client.get_object(
+                    Bucket=self.bucket,
+                    Key=key,
+                    Range="bytes=0-4095",
+                    IfMatch=head["ETag"],
+                )
+                try:
+                    first_bytes = response["Body"].read(4096)
+                finally:
+                    response["Body"].close()
+            return UploadObject(
+                head["ContentLength"], head.get("ChecksumSHA256"), first_bytes
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {
+                "404",
+                "NoSuchKey",
+                "NotFound",
+            }:
+                return None
+            raise
 
     def put_result(self, job_id: str, payload: bytes) -> str:
         key = self.result_key(job_id)
