@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [1.0, 6.0]
 gate: ".venv/bin/pytest -q -k v08_operator_delivery"
@@ -46,8 +46,8 @@ Projeção de Entrega de Notificações com o resumo da falha, nunca o `payload`
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v08_operator_delivery`
-- [ ] Falha em retentativa e falha definitiva aparecem distintas, e o estado do job não muda em nenhum dos casos.
-- [ ] Nenhuma tentativa listada contém `payload`, material ou URL de origem.
-- [ ] Tentativa de job já expurgado continua listada pelo id do job.
-- [ ] Destino desativado aparece inativo na consulta da conta.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v08_operator_delivery`
+- [x] Falha em retentativa e falha definitiva aparecem distintas, e o estado do job não muda em nenhum dos casos.
+- [x] Nenhuma tentativa listada contém `payload`, material ou URL de origem.
+- [x] Tentativa de job já expurgado continua listada pelo id do job.
+- [x] Destino desativado aparece inativo na consulta da conta.

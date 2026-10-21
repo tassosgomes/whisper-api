@@ -59,7 +59,7 @@ Nenhum. A trilha administrativa e sua migration nascem em 2.0, a primeira mutaç
 - [x] 5.0 Configurar e trocar o destino de webhook
 - [x] 6.0 Rotacionar o material e desativar o destino
 - [x] 7.0 Ver a fila e os jobs retidos sem conteúdo
-- [ ] 8.0 Ver tentativas e falhas de entrega
+- [x] 8.0 Ver tentativas e falhas de entrega
 
 ## Verificação herdada
 

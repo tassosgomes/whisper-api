@@ -307,6 +307,22 @@ def get_queue(request: Request, response: Response) -> dict:
     return request.app.state.jobs.get_queue()
 
 
+@app.get("/v1/delivery-attempts", operation_id="listDeliveryAttempts")
+def list_delivery_attempts(
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+    accountId: UUID | None = None,
+    jobId: str | None = None,
+    willRetry: bool | None = None,
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.webhook_config_store.list_delivery_attempts(
+        page, size, account_id=accountId, job_id=jobId, will_retry=willRetry
+    )
+
+
 @app.get("/v1/jobs", operation_id="listOperationalJobs")
 def list_operational_jobs(
     request: Request,

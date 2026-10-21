@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from threading import Event, Thread
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -221,6 +221,73 @@ class WebhookConfigStore:
             if account.webhook_url is None and account.webhook_disabled_at is None:
                 raise WebhookDestinationNotFound("Destino não encontrado.")
             return self._destination_metadata(session, account)
+
+    def list_delivery_attempts(
+        self,
+        page: int,
+        size: int,
+        *,
+        account_id: UUID | None = None,
+        job_id: str | None = None,
+        will_retry: bool | None = None,
+    ) -> dict:
+        """Project the latest retained attempt per event, without loading payloads.
+
+        The pilot retains delivery state rather than an attempt history. An
+        attempt's UUID derives from its stable event ID and attempt counter.
+        No job join is needed, so purging a job cannot hide its delivery state.
+        """
+        active = (
+            Account.webhook_url.is_not(None) & Account.webhook_disabled_at.is_(None)
+        ).label("destination_active")
+        retry = (
+            (NotificationEvent.status == "pending")
+            & NotificationEvent.next_attempt_at.is_not(None)
+            & (NotificationEvent.retry_deadline > _utc_now())
+            & active
+        ).label("will_retry")
+        query = (
+            select(
+                NotificationEvent.event_id,
+                NotificationEvent.job_id,
+                NotificationEvent.account_id,
+                NotificationEvent.attempt_count,
+                NotificationEvent.last_attempt_at,
+                NotificationEvent.last_status_code,
+                NotificationEvent.last_error_code,
+                active,
+                retry,
+            )
+            .join(Account, Account.id == NotificationEvent.account_id)
+            .where(
+                NotificationEvent.attempt_count > 0,
+                NotificationEvent.last_attempt_at.is_not(None),
+            )
+        )
+        if account_id is not None:
+            query = query.where(NotificationEvent.account_id == account_id)
+        if job_id is not None:
+            query = query.where(NotificationEvent.job_id == job_id)
+        if will_retry is not None:
+            query = query.where(retry == will_retry)
+        with self._sessions() as session:
+            total = session.scalar(select(func.count()).select_from(query.subquery()))
+            rows = session.execute(
+                query.order_by(
+                    NotificationEvent.last_attempt_at.desc(), NotificationEvent.event_id
+                )
+                .offset((page - 1) * size)
+                .limit(size)
+            ).all()
+            return {
+                "data": [_delivery_attempt(row) for row in rows],
+                "pagination": {
+                    "page": page,
+                    "size": size,
+                    "total": total,
+                    "totalPages": (total + size - 1) // size,
+                },
+            }
 
     @staticmethod
     def _destination_metadata(session: Session, account: Account) -> dict:
@@ -441,6 +508,41 @@ class WebhookHTTPTransport:
             if response is not None:
                 response.close()
             connection.close()
+
+
+def _delivery_attempt(row) -> dict:
+    result = {
+        "attemptId": str(
+            uuid5(NAMESPACE_URL, f"whisper:delivery:{row.event_id}:{row.attempt_count}")
+        ),
+        "accountId": str(row.account_id),
+        "jobId": row.job_id,
+        "eventId": row.event_id,
+        "occurredAt": row.last_attempt_at.isoformat().replace("+00:00", "Z"),
+        "willRetry": row.will_retry,
+        "destinationActive": row.destination_active,
+    }
+    # Only fixed summaries and numeric HTTP status may reach the operator.
+    # Never echo stored error text, receiver bodies, URLs or key material.
+    failures = {
+        "transient_delivery_failure": "Falha transitória de entrega",
+        "retry_window_expired": "Janela de retentativa encerrada",
+        "endpoint_gone": "Destino desativado pelo receptor",
+        "operator_disabled": "Destino desativado pelo operador",
+        "invalid_destination": "Destino recusado pela política de entrega",
+        "invalid_configuration": "Configuração de entrega inválida",
+        "redirect_rejected": "Redirecionamento recusado",
+        "http_error": "Falha HTTP definitiva",
+    }
+    failure = None
+    if row.last_error_code is not None:
+        failure = failures.get(row.last_error_code, "Falha de entrega")
+    if row.last_status_code is not None and 300 <= row.last_status_code <= 599:
+        http = f"receptor respondeu {row.last_status_code}"
+        failure = f"{failure}; {http}" if failure else http
+    if failure is not None:
+        result["failure"] = failure
+    return result
 
 
 class NotificationDispatcher:

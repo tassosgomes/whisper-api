@@ -219,6 +219,7 @@ _CONSOLE_PAGE = """<!doctype html>
     <section aria-labelledby="destinations-heading">
       <h2 id="destinations-heading">Destinos de webhook</h2>
       <p id="destination-account">Selecione uma conta na lista.</p>
+      <button id="account-delivery-open" type="button" disabled>Ver tentativas desta conta</button>
       <form id="destination-form">
         <fieldset id="destination-fields" disabled>
           <legend>Endereço do webhook</legend>
@@ -266,7 +267,25 @@ _CONSOLE_PAGE = """<!doctype html>
       </nav>
       <pre id="job-detail"></pre>
     </section>
-    <section aria-labelledby="attempts-heading"><h2 id="attempts-heading">Tentativas de entrega</h2></section>
+    <section aria-labelledby="delivery-heading">
+      <h2 id="delivery-heading">Tentativas de entrega</h2>
+      <p id="delivery-context">Abra as tentativas de uma conta ou de um job.</p>
+      <p>Última tentativa guardada de cada evento.</p>
+      <label for="delivery-filter">Retentativa</label>
+      <select id="delivery-filter">
+        <option value="">Todas</option>
+        <option value="true">Pendente de retentativa</option>
+        <option value="false">Sem nova tentativa</option>
+      </select>
+      <button id="delivery-refresh" type="button" disabled>Atualizar tentativas</button>
+      <p id="delivery-error" role="alert" hidden></p>
+      <ul id="delivery-list"></ul>
+      <nav aria-label="Páginas de tentativas">
+        <button id="delivery-previous" type="button" disabled>Anterior</button>
+        <span id="delivery-pagination"></span>
+        <button id="delivery-next" type="button" disabled>Próxima</button>
+      </nav>
+    </section>
   </main>
   <script>
     document.getElementById("operator-logout").addEventListener("click", async () => {
@@ -422,6 +441,8 @@ _CONSOLE_PAGE = """<!doctype html>
     async function selectAccount(accountId) {
       clearCredentialSecret();
       resetDestination();
+      resetDelivery();
+      document.getElementById("account-delivery-open").disabled = true;
       const view = credentialView;
       selectedAccountId = null;
       credentialIssue.disabled = true;
@@ -435,6 +456,7 @@ _CONSOLE_PAGE = """<!doctype html>
       const account = await credentialRequest(`/v1/accounts/${accountId}`);
       if (view !== credentialView) return;
       selectedAccountId = account.accountId;
+      document.getElementById("account-delivery-open").disabled = false;
       document.getElementById("credential-account").textContent = `${account.name} (${account.accountId})`;
       document.getElementById("destination-account").textContent = `${account.name} (${account.accountId})`;
       updateCredentialActions();
@@ -853,6 +875,14 @@ _CONSOLE_PAGE = """<!doctype html>
           open.textContent = "Consultar job";
           open.addEventListener("click", () => openJob(job.jobId));
           item.appendChild(open);
+          const attempts = document.createElement("button");
+          attempts.type = "button";
+          attempts.textContent = "Ver tentativas deste job";
+          attempts.addEventListener("click", () => openDelivery({
+            accountId: job.accountId, jobId: job.jobId,
+            label: `${job.accountName} (${job.accountId}) — job ${job.jobId}`,
+          }));
+          item.appendChild(attempts);
           list.appendChild(item);
         }
         jobsPage = result.pagination.page;
@@ -865,6 +895,90 @@ _CONSOLE_PAGE = """<!doctype html>
       }
     }
 
+    const deliveryError = document.getElementById("delivery-error");
+    const deliveryFilter = document.getElementById("delivery-filter");
+    const deliveryPrevious = document.getElementById("delivery-previous");
+    const deliveryNext = document.getElementById("delivery-next");
+    let deliveryContext = null;
+    let deliveryPage = 1;
+    let deliveryView = 0;
+
+    function resetDelivery() {
+      ++deliveryView;
+      deliveryContext = null;
+      deliveryError.hidden = true;
+      deliveryPrevious.disabled = deliveryNext.disabled = true;
+      document.getElementById("delivery-refresh").disabled = true;
+      document.getElementById("delivery-context").textContent = "Abra as tentativas de uma conta ou de um job.";
+      document.getElementById("delivery-list").replaceChildren();
+      document.getElementById("delivery-pagination").textContent = "";
+    }
+
+    function openDelivery(context) {
+      resetDelivery();
+      deliveryContext = context;
+      deliveryFilter.value = "";
+      document.getElementById("delivery-context").textContent = context.label;
+      document.getElementById("delivery-refresh").disabled = false;
+      document.getElementById("delivery-heading").scrollIntoView();
+      loadDelivery();
+    }
+
+    async function loadDelivery(page = 1) {
+      if (!deliveryContext) return;
+      const view = ++deliveryView;
+      const context = deliveryContext;
+      const query = new URLSearchParams({ _page: page, _size: 10, accountId: context.accountId });
+      if (context.jobId) query.set("jobId", context.jobId);
+      if (deliveryFilter.value) query.set("willRetry", deliveryFilter.value);
+      deliveryError.hidden = true;
+      deliveryPrevious.disabled = deliveryNext.disabled = true;
+      document.getElementById("delivery-list").replaceChildren();
+      document.getElementById("delivery-pagination").textContent = "";
+      try {
+        const response = await fetch(`/v1/delivery-attempts?${query}`, { cache: "no-store" });
+        if (response.status === 401) {
+          clearCredentialSecret();
+          clearDestinationSecret();
+          window.location.reload();
+        }
+        if (!response.ok) throw new Error("Não foi possível consultar as tentativas. Atualize para tentar novamente.");
+        const result = await response.json();
+        if (view !== deliveryView) return;
+        const list = document.getElementById("delivery-list");
+        for (const attempt of result.data) {
+          const item = document.createElement("li");
+          const state = attempt.willRetry ? "Pendente de retentativa" : (attempt.failure ? "Falha encerrada" : "Sem nova tentativa");
+          item.textContent = `Conta ${attempt.accountId}; job ${attempt.jobId}; evento ${attempt.eventId}; tentativa ${attempt.attemptId}; em ${attempt.occurredAt}: ${state}. ` +
+            (attempt.failure ? `${attempt.failure}. ` : "") +
+            (attempt.destinationActive ? "Destino ativo." : "Destino inativo.");
+          list.appendChild(item);
+        }
+        deliveryPage = result.pagination.page;
+        document.getElementById("delivery-pagination").textContent = result.pagination.total === 0
+          ? "Nenhuma tentativa guardada." : `Página ${deliveryPage} de ${result.pagination.totalPages}`;
+        deliveryPrevious.disabled = deliveryPage <= 1;
+        deliveryNext.disabled = deliveryPage >= result.pagination.totalPages;
+        if (context.accountId === selectedAccountId) {
+          loadDestination().catch((error) => showDestinationError(error.message));
+        }
+      } catch (error) {
+        if (view !== deliveryView) return;
+        deliveryError.textContent = error.message;
+        deliveryError.hidden = false;
+      }
+    }
+
+    document.getElementById("account-delivery-open").addEventListener("click", () => {
+      if (selectedAccountId) openDelivery({
+        accountId: selectedAccountId,
+        label: document.getElementById("destination-account").textContent,
+      });
+    });
+    deliveryFilter.addEventListener("change", () => loadDelivery());
+    document.getElementById("delivery-refresh").addEventListener("click", () => loadDelivery(deliveryPage));
+    deliveryPrevious.addEventListener("click", () => loadDelivery(deliveryPage - 1));
+    deliveryNext.addEventListener("click", () => loadDelivery(deliveryPage + 1));
     document.getElementById("queue-refresh").addEventListener("click", () => loadQueue());
     jobsPrevious.addEventListener("click", () => loadQueue(jobsPage - 1));
     jobsNext.addEventListener("click", () => loadQueue(jobsPage + 1));
