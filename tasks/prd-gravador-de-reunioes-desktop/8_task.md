@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [6.0, 7.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V05*" --minimum-expected-tests 4"
@@ -42,7 +42,7 @@ O alvo do Credential Manager é próprio do app e distinto do alvo de teste. O h
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0) no Windows: `dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V05*" --minimum-expected-tests 4`
-- [ ] Salvar, reiniciar o app e ler a chave funciona; remover apaga do Credential Manager.
-- [ ] Validação manual na sessão Windows: chave válida, chave inválida e API desligada mostram as três mensagens corretas.
-- [ ] A chave não aparece em arquivo de configuração nem em log.
+- [x] Gate focalizado passa (exit 0) no Windows: `dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V05*" --minimum-expected-tests 4`
+- [x] Salvar, reiniciar o app e ler a chave funciona; remover apaga do Credential Manager.
+- [x] Validação manual na sessão Windows: chave válida, chave inválida e API desligada mostram as três mensagens corretas.
+- [x] A chave não aparece em arquivo de configuração nem em log.
