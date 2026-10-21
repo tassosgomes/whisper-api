@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [11.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V08*" --minimum-expected-tests 8"
@@ -39,6 +39,6 @@ Leitura sempre do disco local (RN-G05). Sem edição de texto (feature futura).
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V08*" --minimum-expected-tests 8`
-- [ ] Cópia com e sem tempos; exportação com e sem arquivo existente; transcrição vazia; `schemaVersion` desconhecida.
-- [ ] Nenhum teste faz requisição de rede.
+- [x] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V08*" --minimum-expected-tests 8`
+- [x] Cópia com e sem tempos; exportação com e sem arquivo existente; transcrição vazia; `schemaVersion` desconhecida.
+- [x] Nenhum teste faz requisição de rede.

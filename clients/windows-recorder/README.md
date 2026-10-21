@@ -308,3 +308,29 @@ para a API e comandos privados para dirigir a fronteira do worker e a retenção
 Relógio, scheduler e conectividade são controlados; erros de rede/5xx e um
 formato futuro de resultado usam interceptação HTTP. Não executa modelo de
 transcrição, dispositivo de áudio ou notificação real do Windows.
+
+## Leitura, cópia e exportação local (V-08)
+
+O host cria `TranscriptViewModel` com `LocalTranscriptStore` e o repositório de
+gravações, e chama `Open(id)`. A leitura usa `result-v1.json` para os trechos e
+seus tempos e `transcription.txt` para o texto com tempos. Não exige configuração
+da API nem consulta o serviço, inclusive após a retenção de 24 horas. `Recording`
+mantém a gravação acessível quando `UpdateRequired` pede uma versão nova do app;
+nessa situação, o JSON bruto é preservado e cópia/exportação ficam indisponíveis.
+`IsEmpty` e `Message` indicam quando nenhuma fala foi reconhecida.
+
+`CopyText(includeTimestamps)` entrega o texto completo ao host, que o coloca na
+área de transferência. `Export(path)` grava UTF-8 com tempos no destino escolhido.
+Se retornar `ConfirmationRequired`, o host apresenta a confirmação para aquele
+caminho; somente após o aceite chama `Export(path, overwriteConfirmed: true)`.
+Sem aceite, o arquivo existente permanece intacto. `StorageError` fornece uma
+mensagem fixa sem conteúdo nem detalhes do caminho. As operações da ViewModel
+são síncronas e notificam `PropertyChanged` na thread do chamador.
+A tela, os diálogos e a área de transferência reais pertencem à task 14.0.
+
+```bash
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V08*" --minimum-expected-tests 8
+```
+
+Os testes V-08 usam apenas arquivos locais temporários no formato de V-07;
+não fazem requisições de rede e não precisam de API, PostgreSQL ou MinIO.

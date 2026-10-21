@@ -87,7 +87,7 @@ O orquestrador deve entregar as tasks de Windows a uma sessão Windows. As tasks
 - [ ] 10.0 Enviar uma gravação para transcrição (host Windows)
 - [x] 11.0 Acompanhar o job e guardar a transcrição (núcleo)
 - [ ] 12.0 Acompanhar o job e guardar a transcrição (host Windows)
-- [ ] 13.0 Ler, copiar e exportar a transcrição (núcleo e apresentação)
+- [x] 13.0 Ler, copiar e exportar a transcrição (núcleo e apresentação)
 - [ ] 14.0 Ler, copiar e exportar a transcrição (host Windows)
 - [ ] 15.0 Gerenciar gravações e apagar os dados do app (núcleo)
 - [ ] 16.0 Gerenciar gravações e apagar os dados do app (host Windows)
