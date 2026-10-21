@@ -22,6 +22,7 @@ public sealed class RecordingViewModel : INotifyPropertyChanged, IDisposable
     public bool IsPaused => session.IsPaused;
     public TimeSpan Duration => session.Current?.Duration ?? TimeSpan.Zero;
     public RecordingState? State => session.Current?.State;
+    public Guid? CurrentId => session.Current?.Id;
     public IReadOnlyDictionary<AudioSourceKind, float> Levels => session.Levels;
     public IReadOnlyDictionary<AudioSourceKind, bool> Sources => session.SourceAvailability;
     public IReadOnlyList<RecordingWarning> Warnings => session.Current?.Warnings ?? [];
@@ -35,7 +36,13 @@ public sealed class RecordingViewModel : INotifyPropertyChanged, IDisposable
     {
         Error = null;
         try { await session.StartAsync(devices, cancellationToken); }
-        catch (InvalidOperationException ex) { Error = ex.Message; }
+        catch (InvalidOperationException)
+        {
+            // Texto fixo: a mensagem da exceção pode vir da captura e conter dados do dispositivo.
+            Error = devices.Count == 0
+                ? "Escolha ao menos uma fonte de áudio para gravar."
+                : "Não foi possível iniciar a gravação. Confira as fontes de áudio e tente de novo.";
+        }
         catch (UnauthorizedAccessException)
         {
             Error = "Acesso ao microfone negado. Libere o acesso nas configurações de privacidade do Windows ou escolha só o áudio do sistema.";

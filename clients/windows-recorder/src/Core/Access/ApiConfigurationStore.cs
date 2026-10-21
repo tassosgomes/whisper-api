@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Whisper.Recorder.Core.Storage;
 
 namespace Whisper.Recorder.Core.Access;
 
@@ -34,7 +35,7 @@ public sealed class ApiConfigurationStore(string path)
                 JsonSerializer.Serialize(output, new { apiBaseAddress = normalized!.AbsoluteUri });
                 output.Flush(flushToDisk: true);
             }
-            File.Move(temporary, fullPath, overwrite: true);
+            AtomicFile.Replace(temporary, fullPath);
         }
         finally
         {

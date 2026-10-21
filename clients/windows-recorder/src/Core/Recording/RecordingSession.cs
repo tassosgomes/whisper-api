@@ -303,6 +303,12 @@ public sealed class RecordingSession : IAsyncDisposable
                 repository.Save(current!);
                 Changed?.Invoke();
             }
+            else if (!available[change.Device.Source])
+            {
+                // O dispositivo voltou e o host reabriu a captura: os blocos voltam a entrar na linha do tempo.
+                available[change.Device.Source] = true;
+                Changed?.Invoke();
+            }
         }
     }
 

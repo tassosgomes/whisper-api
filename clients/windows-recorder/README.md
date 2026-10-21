@@ -8,9 +8,9 @@ raiz do repositório.
 |---|---|---|
 | `src/Core` | `net10.0` | Portas, gravação local, tempo, diagnóstico e cliente da API gerado |
 | `src/Presentation` | `net10.0` | ViewModel de gravação, sem referências WPF |
-| `src/Host` | `net10.0-windows` | Shell WPF com WPF-UI; adaptadores Windows nas próximas fatias |
+| `src/Host` | `net10.0-windows` | App WPF com WPF-UI: captura WASAPI (NAudio), tela de gravação, barra de tarefas, bandeja e atalho global; demais adaptadores nas próximas fatias |
 | `tests/Core.Tests` | `net10.0` | Núcleo e apresentação, xUnit/MTP e dublês das portas |
-| `tests/Host.Tests` | `net10.0-windows` | Projeto reservado aos testes Windows; ainda sem testes |
+| `tests/Host.Tests` | `net10.0-windows` | Testes do host no Windows (captura com fontes sintéticas, indicadores, atalho) |
 
 O host depende da apresentação, que depende do núcleo. O núcleo não importa
 código Python nem tipos Windows. A API gerada consome apenas o contrato público.
@@ -80,8 +80,8 @@ um pedido da API com o limite de 5 GiB. Adicione os cenários de cada fatia a
 classes próprias, com o namespace `Whisper.Recorder.Core.Tests`. Os dublês
 reutilizáveis ficam em `tests/Core.Tests/Doubles`; o agendador registra esperas
 sem dormir, e o relógio é controlado pelo teste.
-O projeto `Host.Tests` fica sem testes até as fatias Windows; sua execução vazia
-também reprova, por isso o CI Linux seleciona apenas `Core.Tests`.
+O projeto `Host.Tests` só roda no Windows (alvo `net10.0-windows`); o CI Linux
+seleciona apenas `Core.Tests`.
 
 ## Gravação local (V-04)
 
@@ -124,6 +124,74 @@ Os testes usam fontes sintéticas, relógio controlado, arquivos temporários e 
 agendador que aguarda pulsos explícitos. O teste de recuperação inicia outro
 processo .NET, aguarda um checkpoint, encerra-o à força e reabre os arquivos.
 Não usa rede, MinIO nem dispositivos reais.
+
+## Host Windows: captura e tela de gravação (V-04, task 6.0)
+
+Requer Windows 11, SDK .NET 10 e, para gravar de verdade, um microfone e uma saída de áudio.
+
+```powershell
+dotnet run --project clients/windows-recorder/src/Host
+dotnet test --project clients/windows-recorder/tests/Host.Tests --minimum-expected-tests 1
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V04*" --minimum-expected-tests 6
+```
+
+O app abre na tela de gravação (tema Fluent, Mica). Os arquivos ficam em
+`%LOCALAPPDATA%\Whisper\Recorder\recordings\<uuid>\` (`audio.wav` e `metadata.json`); o diário
+de eventos fica em `%LOCALAPPDATA%\Whisper\Recorder\diagnostics.log`. Só uma instância roda por vez.
+O roteiro da validação manual está em
+[`6.0_manual_validation.md`](../../tasks/prd-gravador-de-reunioes-desktop/6.0_manual_validation.md).
+
+**Captura (`src/Host/Audio`).** `WasapiAudioCapture` implementa `IAudioCapture` sobre uma fábrica
+(`ICaptureDeviceCatalog`/`ICaptureSource`), que no app é o NAudio 3.3.0 (`WasapiCapture` para o
+microfone e `WasapiLoopbackCapture` para a saída escolhida, a padrão por omissão) e nos testes é
+sintética. O host só entrega PCM nativo (float 32, inteiro 16/24/32 bits, qualquer taxa e canais)
+convertido para inteiro de 16 bits intercalado; não insere silêncio nem mixa, o que é do `AudioTimeline`.
+
+- **Carimbo dos blocos.** O WASAPI não carimba pacotes. `BlockTimestamper` usa o relógio de parede
+  na chegada (o bloco termina quando chega, então começa em `chegada - duração`) e a contagem de
+  frames para manter blocos contínuos. Se a chegada se afastar mais de 200 ms da contagem
+  (loopback que ficou em silêncio, deriva do dispositivo), reancora na chegada. Fica dentro da
+  margem de 500 ms do núcleo.
+- **Nível.** Pico por bloco (0..1). O loopback só entrega dados enquanto algo toca, então um
+  temporizador zera o nível da fonte sem dados há 250 ms.
+- **Pré-visualização.** A tela abre as fontes ao listar os dispositivos para mostrar o nível antes de
+  gravar; a sessão descarta esses blocos até iniciar. `StartAsync` é idempotente por dispositivo.
+- **Perda e volta.** O catálogo real escuta o `MMDeviceNotificationClient` (estado do dispositivo
+  e remoção); uma parada inesperada do fluxo também conta como perda. A fonte perdida emite
+  `DeviceAvailabilityChanged(false)` e o host tenta reabri-la a cada segundo (o mesmo dispositivo
+  ou, se era o padrão, o novo padrão do Windows). Quando volta, emite `true` com o dispositivo
+  pedido; a sessão (ajuste mínimo) volta a aceitar os blocos dessa fonte.
+- **Permissão.** `E_ACCESSDENIED` vira `UnauthorizedAccessException`; a tela mostra como liberar
+  o microfone (Configurações > Privacidade e segurança > Microfone) e oferece gravar só o
+  áudio do sistema. Se o Windows entregar só silêncio sem erro, o nível não se move: confira a
+  mesma configuração.
+
+**Tela e indicadores.** `RecordingScreenViewModel` (em `src/Presentation`, sem tipos WPF) concentra
+fontes, dispositivos, nível, comandos e lista. `RecordingIndicatorCoordinator` leva o estado à
+barra de tarefas (`TaskbarIndicator`: ícone sobreposto, barra vermelha ou amarela e descrição com o
+tempo) e à bandeja (`TrayIndicator`, que também é o `INotifier`, com menu abrir, iniciar/parar e sair).
+Cada início de gravação mostra o aviso de terceiros na tela e em notificação da bandeja
+(`RecorderNotification.RecordingStarted`), mesmo com o atalho e a janela minimizada. Fechar durante
+a gravação pergunta "Parar e salvar" ou "Continuar gravando" (`ShutdownGuard`); nunca descarta.
+A lista de gravações tem título, data, duração e situação em texto e símbolo (salva, interrompida,
+gravando), navegável por teclado, com o nome acessível completo por linha.
+
+**Atalho global.** `RegisterHotKey` com `GlobalHotkey`: tenta, nesta ordem, Ctrl+Alt+R,
+Ctrl+Alt+Shift+R, Ctrl+Alt+F9 e Ctrl+Shift+F9, e usa a primeira que o Windows aceitar (outro
+programa pode já tê-la reservado). A escolhida aparece na tela e no menu da bandeja. Inicia quando
+parado e para, salvando, quando grava ou está pausado.
+
+**Testes (`tests/Host.Tests`).** As classes `V04*` usam fontes WASAPI sintéticas, relógio controlado,
+a sessão real do núcleo e arquivos temporários: mixagem das duas vozes, silêncio do loopback preenchido
+pelo núcleo, carimbos, perda e volta de dispositivo, nível e troca de dispositivo, permissão negada,
+indicador da barra de tarefas (em thread STA explícita), atalho e confirmação ao fechar.
+Não usam hardware, rede nem interação. A captura real, a tela, a bandeja e o atalho global só são
+verificados na validação manual.
+
+Limitações conhecidas: a primeira janela de ~100 ms depois de iniciar pode ser descartada (o
+bloco começa antes do início da sessão); uma fonte que volta depois de desconectada recomeça
+sem preencher o intervalo, que fica em silêncio; e NAudio 3 marca `WasapiCapture` como obsoleto em
+favor de `WasapiRecorder`: o uso fica isolado em `NAudioCaptureDeviceCatalog` com `#pragma` local.
 
 ## Acesso à API (V-05)
 

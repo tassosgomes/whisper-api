@@ -79,6 +79,47 @@ public sealed class V04RecordingTests
     }
 
     [Fact]
+    public async Task DeviceThatComesBackResumesItsBlocksInTheWavAndTheLossWarningStays()
+    {
+        await using var rig = new RecordingRig();
+        await rig.Start(AudioSourceKind.Microphone);
+        rig.Emit(AudioSourceKind.Microphone, 8000);
+        rig.Advance(1);
+
+        rig.Capture.EmitAvailability(new AudioDeviceAvailability(RecordingRig.Microphone, false));
+        Assert.False(rig.Session.SourceAvailability[AudioSourceKind.Microphone]);
+        rig.Emit(AudioSourceKind.Microphone, 4000); // dispositivo perdido: o bloco é descartado
+        rig.Advance(1);
+
+        rig.Capture.EmitAvailability(new AudioDeviceAvailability(RecordingRig.Microphone, true));
+        Assert.True(rig.Session.SourceAvailability[AudioSourceKind.Microphone]);
+        rig.Emit(AudioSourceKind.Microphone, 6000);
+        rig.Advance(1);
+        await rig.Session.StopAsync(Token);
+
+        var samples = rig.ReadSamples();
+        Assert.Equal(3 * 16000, samples.Length);
+        Assert.All(samples.Take(16000), s => Assert.Equal(4000, s));
+        Assert.All(samples.Skip(16000).Take(16000), s => Assert.Equal(0, s));
+        Assert.All(samples.Skip(32000), s => Assert.Equal(3000, s));
+        Assert.Contains(RecordingWarning.DeviceLost, rig.Session.Current!.Warnings);
+        Assert.Equal(RecordingState.Saved, rig.Session.Current.State);
+    }
+
+    [Fact]
+    public async Task AvailabilityOfANonSelectedDeviceDoesNotRestoreTheLostSource()
+    {
+        await using var rig = new RecordingRig();
+        await rig.Start(AudioSourceKind.Microphone);
+        rig.Capture.EmitAvailability(new AudioDeviceAvailability(RecordingRig.Microphone, false));
+        rig.Capture.EmitAvailability(new AudioDeviceAvailability(
+            new AudioDevice("other", "Other", AudioSourceKind.Microphone, false), true));
+        Assert.False(rig.Session.SourceAvailability[AudioSourceKind.Microphone]);
+        rig.Advance(1);
+        await rig.Session.StopAsync(Token);
+    }
+
+    [Fact]
     public async Task SmallBlocksDeliveredAfterTheirPeriodAcrossTicksLeaveNoGaps()
     {
         await using var rig = new RecordingRig();

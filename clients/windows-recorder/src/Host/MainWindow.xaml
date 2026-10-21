@@ -2,7 +2,144 @@
                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-                 Title="Whisper" Width="960" Height="640"
-                 WindowBackdropType="Mica">
-    <Grid />
+                 xmlns:host="clr-namespace:Whisper.Recorder.Host"
+                 Title="Whisper" Width="960" Height="720" MinWidth="720" MinHeight="560"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+        <host:NullToVisibilityConverter x:Key="NullToVisibility" />
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+    </Window.Resources>
+    <Window.TaskbarItemInfo>
+        <TaskbarItemInfo />
+    </Window.TaskbarItemInfo>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Grid.Row="0" Title="Whisper: gravador de reuniões" />
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24,8,24,24">
+                <!-- Fontes e nível antes de gravar -->
+                <TextBlock Style="{StaticResource SectionTitle}" Text="Fontes de áudio" />
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="180" />
+                        <ColumnDefinition Width="110" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <CheckBox Grid.Row="0" Grid.Column="0" Content="Microfone" Margin="0,0,0,12"
+                              IsChecked="{Binding UseMicrophone, Mode=TwoWay}"
+                              IsEnabled="{Binding CanChangeSources}"
+                              AutomationProperties.Name="Gravar o microfone" />
+                    <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,12,12" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Microphones}" DisplayMemberPath="DisplayName"
+                              SelectedItem="{Binding SelectedMicrophone, Mode=TwoWay}"
+                              IsEnabled="{Binding CanChangeSources}"
+                              AutomationProperties.Name="Dispositivo do microfone" />
+                    <ProgressBar Grid.Row="0" Grid.Column="2" Margin="0,0,12,12" Height="10" VerticalAlignment="Center"
+                                 Minimum="0" Maximum="1" Value="{Binding MicrophoneLevel, Mode=OneWay}"
+                                 AutomationProperties.Name="Nível do microfone" />
+                    <TextBlock Grid.Row="0" Grid.Column="3" VerticalAlignment="Center" Margin="0,0,0,12"
+                               Text="{Binding MicrophoneStatus}" />
+
+                    <CheckBox Grid.Row="1" Grid.Column="0" Content="Áudio do sistema"
+                              IsChecked="{Binding UseSystemAudio, Mode=TwoWay}"
+                              IsEnabled="{Binding CanChangeSources}"
+                              AutomationProperties.Name="Gravar o áudio do sistema" />
+                    <ComboBox Grid.Row="1" Grid.Column="1" Margin="0,0,12,0" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding SystemOutputs}" DisplayMemberPath="DisplayName"
+                              SelectedItem="{Binding SelectedSystemOutput, Mode=TwoWay}"
+                              IsEnabled="{Binding CanChangeSources}"
+                              AutomationProperties.Name="Dispositivo de saída do áudio do sistema" />
+                    <ProgressBar Grid.Row="1" Grid.Column="2" Margin="0,0,12,0" Height="10" VerticalAlignment="Center"
+                                 Minimum="0" Maximum="1" Value="{Binding SystemLevel, Mode=OneWay}"
+                                 AutomationProperties.Name="Nível do áudio do sistema" />
+                    <TextBlock Grid.Row="1" Grid.Column="3" VerticalAlignment="Center"
+                               Text="{Binding SystemStatus}" />
+                </Grid>
+
+                <!-- Windows negou o microfone -->
+                <ui:InfoBar Title="Microfone sem acesso" Severity="Warning" IsClosable="False" Margin="0,0,0,12"
+                            IsOpen="{Binding MicrophoneDenied, Mode=OneWay}"
+                            Message="{Binding MicrophoneDeniedHelp}" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12"
+                            Visibility="{Binding MicrophoneDenied, Converter={StaticResource BoolToVisibility}}">
+                    <Button Content="Tentar de novo" Command="{Binding RetryMicrophone}" Margin="0,0,8,0" />
+                    <Button Content="Gravar só o áudio do sistema" Command="{Binding SystemOnly}" />
+                </StackPanel>
+
+                <!-- Contador e controles -->
+                <Border Padding="20" CornerRadius="8" Margin="0,8,0,12"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontSize="20" Text="{Binding StateGlyph}" Margin="0,0,8,0" />
+                            <TextBlock FontSize="20" Text="{Binding StateText}" />
+                        </StackPanel>
+                        <TextBlock FontSize="48" FontWeight="SemiBold" Margin="0,4,0,12"
+                                   Text="{Binding DurationText}"
+                                   AutomationProperties.Name="Tempo gravado"
+                                   AutomationProperties.LiveSetting="Off" />
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button Content="Gravar" Appearance="Primary" Command="{Binding Start}" Margin="0,0,8,0"
+                                       AutomationProperties.Name="Iniciar gravação" />
+                            <ui:Button Content="{Binding PauseResumeText}" Command="{Binding PauseResume}" Margin="0,0,8,0" />
+                            <ui:Button Content="Parar e salvar" Command="{Binding Stop}" />
+                        </StackPanel>
+                        <TextBlock x:Name="HotkeyHint" Margin="0,12,0,0" Opacity="0.8" />
+                    </StackPanel>
+                </Border>
+
+                <ui:InfoBar Title="Aviso sobre gravação" Severity="Informational" IsClosable="False" Margin="0,0,0,12"
+                            IsOpen="{Binding IsRecording, Mode=OneWay}"
+                            Message="{Binding ThirdPartyNotice}" />
+                <ui:InfoBar Title="Atenção" Severity="Warning" IsClosable="False" Margin="0,0,0,12"
+                            IsOpen="{Binding HasWarning, Mode=OneWay}"
+                            Message="{Binding WarningText}" />
+                <ui:InfoBar Title="Não foi possível gravar" Severity="Error" IsClosable="False" Margin="0,0,0,12"
+                            IsOpen="{Binding HasError, Mode=OneWay}"
+                            Message="{Binding Error}" />
+
+                <!-- Lista de gravações -->
+                <TextBlock Style="{StaticResource SectionTitle}" Text="Gravações" Margin="0,12,0,8" />
+                <TextBlock Text="{Binding EmptyListText}" Margin="0,0,0,8"
+                           Visibility="{Binding EmptyListText, Converter={StaticResource NullToVisibility}}" />
+                <ListView ItemsSource="{Binding Recordings}" MinHeight="140" MaxHeight="360"
+                          AutomationProperties.Name="Lista de gravações"
+                          KeyboardNavigation.TabNavigation="Once">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Situação" Width="150">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding StatusGlyph}" Margin="0,0,6,0" />
+                                            <TextBlock Text="{Binding Status}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="Título" Width="260" DisplayMemberBinding="{Binding Title}" />
+                            <GridViewColumn Header="Data" Width="160" DisplayMemberBinding="{Binding CreatedAt}" />
+                            <GridViewColumn Header="Duração" Width="100" DisplayMemberBinding="{Binding Duration}" />
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
 </ui:FluentWindow>

@@ -6,7 +6,8 @@ public enum RecorderNotification
     TranscriptionFailed,
     RecordingLimitApproaching,
     LowDiskSpace,
-    AudioDeviceLost
+    AudioDeviceLost,
+    RecordingStarted
 }
 
 /// <summary>The host supplies static localized text; notifications never carry transcription text.</summary>

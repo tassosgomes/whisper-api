@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Whisper.Recorder.Core.Storage;
 
 namespace Whisper.Recorder.Core.Recording;
 
@@ -51,7 +52,7 @@ public sealed class RecordingRepository
             JsonSerializer.Serialize(output, metadata, JsonOptions);
             output.Flush(true);
         }
-        File.Move(temporary, MetadataPath(metadata.Id), overwrite: true);
+        AtomicFile.Replace(temporary, MetadataPath(metadata.Id));
     }
 
     /// <summary>Call once on application startup, before creating a recording session.</summary>

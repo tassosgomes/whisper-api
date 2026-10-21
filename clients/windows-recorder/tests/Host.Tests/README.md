@@ -1,5 +1,10 @@
 # Testes do host
 
-Projeto reservado para testes de captura, WPF e integração com Windows nas
-próximas fatias. Ainda não contém testes. Execute-o somente no Windows quando
-houver cenários: o mínimo de 1 teste reprova intencionalmente uma execução vazia.
+Testes do host Windows (`net10.0-windows`), executados somente no Windows. As classes `V04*` cobrem a
+captura WASAPI com fontes sintéticas, os indicadores, o atalho global e a confirmação ao fechar.
+Não dependem de hardware nem de interação; o que usa WPF roda em thread STA explícita.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --minimum-expected-tests 1
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V04*" --minimum-expected-tests 6
+```

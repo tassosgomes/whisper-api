@@ -1,0 +1,358 @@
+using System.ComponentModel;
+using Whisper.Recorder.Core.Ports;
+using Whisper.Recorder.Core.Recording;
+
+namespace Whisper.Recorder.Presentation.Recording;
+
+/// <summary>
+/// Estado da tela de gravação: fontes, dispositivos, nível antes de gravar, comandos e lista.
+/// Não usa tipos WPF. O nível antes de gravar vem da própria porta de captura, aberta como
+/// pré-visualização; a sessão descarta esses blocos até a gravação começar.
+/// </summary>
+public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDisposable
+{
+    public const string MicrophoneHelp =
+        "O Windows não deixou o app usar o microfone. Abra Configurações > Privacidade e segurança > Microfone, " +
+        "ative \"Acesso ao microfone\" e \"Permitir que aplicativos da área de trabalho acessem seu microfone\" e toque em \"Tentar de novo\". " +
+        "Enquanto isso, você pode gravar só o áudio do sistema.";
+
+    private readonly RecordingViewModel recording;
+    private readonly IAudioCapture capture;
+    private readonly Dictionary<AudioSourceKind, AudioDevice> running = [];
+    private IReadOnlyList<RecordingListItem> recordings = [];
+    private IReadOnlyList<AudioDevice> microphones = [];
+    private IReadOnlyList<AudioDevice> outputs = [];
+    private AudioDevice? selectedMicrophone;
+    private AudioDevice? selectedOutput;
+    private bool useMicrophone = true;
+    private bool useSystemAudio = true;
+    private bool microphoneDenied;
+    private bool wasRecording;
+    private string? sourceError;
+    private bool disposed;
+    private bool shuttingDown;
+
+    public RecordingScreenViewModel(RecordingViewModel recording, IAudioCapture capture)
+    {
+        this.recording = recording;
+        this.capture = capture;
+        Start = new AsyncRelayCommand(StartAsync, () => !IsRecording);
+        PauseResume = new RelayCommand(TogglePause, () => IsRecording);
+        Stop = new AsyncRelayCommand(StopAsync, () => IsRecording);
+        Toggle = new AsyncRelayCommand(ToggleAsync);
+        SystemOnly = new AsyncRelayCommand(SystemOnlyAsync, () => !IsRecording);
+        RetryMicrophone = new AsyncRelayCommand(RetryMicrophoneAsync, () => !IsRecording && MicrophoneDenied);
+        RefreshDevices = new AsyncRelayCommand(RefreshDevicesAsync, () => !IsRecording);
+        recording.PropertyChanged += OnRecordingChanged;
+        ReloadRecordings();
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public AsyncRelayCommand Start { get; }
+    public RelayCommand PauseResume { get; }
+    public AsyncRelayCommand Stop { get; }
+    /// <summary>Atalho global: inicia quando parado e para (salvando) quando grava ou está pausado.</summary>
+    public AsyncRelayCommand Toggle { get; }
+    public AsyncRelayCommand SystemOnly { get; }
+    public AsyncRelayCommand RetryMicrophone { get; }
+    public AsyncRelayCommand RefreshDevices { get; }
+
+    public bool IsRecording => recording.IsRecording;
+    public bool IsPaused => recording.IsPaused;
+    public bool CanChangeSources => !IsRecording;
+    public IReadOnlyList<AudioDevice> Microphones => microphones;
+    public IReadOnlyList<AudioDevice> SystemOutputs => outputs;
+    public IReadOnlyList<RecordingListItem> Recordings => recordings;
+    public IReadOnlyList<RecordingWarning> ActiveWarnings => recording.Warnings;
+    public Guid? CurrentRecordingId => recording.CurrentId;
+    public string DurationText => DurationFormat.Format(recording.Duration);
+    public RecordingIndicatorState Indicator => RecordingIndicatorState.From(IsRecording, IsPaused, recording.Duration);
+    public string? ThirdPartyNotice => recording.ThirdPartyNotice;
+    public bool MicrophoneDenied => microphoneDenied;
+    public string? MicrophoneDeniedHelp => microphoneDenied ? MicrophoneHelp : null;
+    public string PauseResumeText => IsPaused ? "Retomar" : "Pausar";
+
+    public string StateText => !IsRecording
+        ? "Pronto para gravar"
+        : IsPaused ? "Gravação pausada" : "Gravando";
+
+    public string StateGlyph => !IsRecording ? "○" : IsPaused ? "⏸" : "●";
+
+    public string? Error => recording.Error ?? sourceError;
+    public bool HasError => Error is not null;
+    public string? EmptyListText => recordings.Count == 0 ? "Nenhuma gravação ainda." : null;
+    public bool HasWarning => recording.Warnings.Count > 0;
+
+    public string? WarningText
+    {
+        get
+        {
+            var lines = recording.Warnings.Select(w => w switch
+            {
+                RecordingWarning.DeviceLost => "Um dispositivo foi desconectado. A gravação continua com a outra fonte.",
+                RecordingWarning.LowDiskSpace => "Pouco espaço livre no disco.",
+                RecordingWarning.DiskFull => "O disco encheu. A gravação foi salva até aqui.",
+                RecordingWarning.LimitApproaching => "A gravação chega a 2 horas em breve.",
+                RecordingWarning.ServiceLimitReached => "Limite de 2 horas atingido. A gravação foi salva.",
+                _ => "Não foi possível abrir um dispositivo de áudio."
+            }).ToArray();
+            return lines.Length == 0 ? null : string.Join(" ", lines);
+        }
+    }
+
+    public AudioDevice? SelectedMicrophone
+    {
+        get => selectedMicrophone;
+        set => _ = ChangeDeviceAsync(AudioSourceKind.Microphone, value);
+    }
+
+    public AudioDevice? SelectedSystemOutput
+    {
+        get => selectedOutput;
+        set => _ = ChangeDeviceAsync(AudioSourceKind.SystemLoopback, value);
+    }
+
+    public bool UseMicrophone
+    {
+        get => useMicrophone;
+        set => _ = ChangeEnabledAsync(AudioSourceKind.Microphone, value);
+    }
+
+    public bool UseSystemAudio
+    {
+        get => useSystemAudio;
+        set => _ = ChangeEnabledAsync(AudioSourceKind.SystemLoopback, value);
+    }
+
+    public double MicrophoneLevel => Level(AudioSourceKind.Microphone);
+    public double SystemLevel => Level(AudioSourceKind.SystemLoopback);
+    public string MicrophoneStatus => SourceStatus(AudioSourceKind.Microphone, useMicrophone, microphoneDenied);
+    public string SystemStatus => SourceStatus(AudioSourceKind.SystemLoopback, useSystemAudio, false);
+
+    private double Level(AudioSourceKind source) =>
+        recording.Levels.TryGetValue(source, out var peak) ? peak : 0;
+
+    private string SourceStatus(AudioSourceKind source, bool enabled, bool denied)
+    {
+        if (denied)
+            return "Sem acesso";
+        if (!enabled)
+            return "Desligado";
+        if (recording.Sources.TryGetValue(source, out var available) && !available)
+            return "Desconectado";
+        if (!running.ContainsKey(source) && !IsRecording)
+            return "Indisponível";
+        return $"Nível {(int)Math.Round(Level(source) * 100)}%";
+    }
+
+    /// <summary>Lista os dispositivos, escolhe os padrão do Windows e abre a pré-visualização do nível.</summary>
+    public async Task RefreshDevicesAsync()
+    {
+        microphones = await capture.ListDevicesAsync(AudioSourceKind.Microphone);
+        outputs = await capture.ListDevicesAsync(AudioSourceKind.SystemLoopback);
+        selectedMicrophone = Pick(microphones, selectedMicrophone);
+        selectedOutput = Pick(outputs, selectedOutput);
+        await StartPreviewAsync();
+    }
+
+    private static AudioDevice? Pick(IReadOnlyList<AudioDevice> devices, AudioDevice? previous) =>
+        devices.FirstOrDefault(d => previous is not null && d.Id == previous.Id)
+        ?? devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
+
+    /// <summary>Abre (de modo idempotente) as fontes ligadas para mostrar o nível. Não grava nada.</summary>
+    public async Task StartPreviewAsync()
+    {
+        sourceError = null;
+        foreach (var (kind, device, enabled) in Selection())
+        {
+            if (!enabled || device is null)
+            {
+                await StopPreviewAsync(kind);
+                continue;
+            }
+            try
+            {
+                await capture.StartAsync(device);
+                running[kind] = device;
+                if (kind == AudioSourceKind.Microphone)
+                    microphoneDenied = false;
+            }
+            catch (UnauthorizedAccessException) when (kind == AudioSourceKind.Microphone)
+            {
+                microphoneDenied = true;
+                running.Remove(kind);
+                useMicrophone = false;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A mensagem da exceção pode conter dados do dispositivo: só texto fixo vai para a tela.
+                running.Remove(kind);
+                sourceError = "Não foi possível abrir um dispositivo de áudio. Escolha outro.";
+            }
+        }
+        Raise();
+    }
+
+    private (AudioSourceKind Kind, AudioDevice? Device, bool Enabled)[] Selection() =>
+    [
+        (AudioSourceKind.Microphone, selectedMicrophone, useMicrophone),
+        (AudioSourceKind.SystemLoopback, selectedOutput, useSystemAudio)
+    ];
+
+    private async Task StopPreviewAsync(AudioSourceKind kind)
+    {
+        if (running.Remove(kind))
+            await capture.StopAsync(kind);
+    }
+
+    private async Task ChangeDeviceAsync(AudioSourceKind kind, AudioDevice? value)
+    {
+        var current = kind == AudioSourceKind.Microphone ? selectedMicrophone : selectedOutput;
+        // O ComboBox do WPF devolve nulo ao trocar a lista; só uma escolha explícita vale.
+        if (value is null)
+            return;
+        if (IsRecording || value == current)
+            return;
+        if (kind == AudioSourceKind.Microphone)
+            selectedMicrophone = value;
+        else
+            selectedOutput = value;
+        await StopPreviewAsync(kind);
+        await StartPreviewAsync();
+    }
+
+    private async Task ChangeEnabledAsync(AudioSourceKind kind, bool value)
+    {
+        var current = kind == AudioSourceKind.Microphone ? useMicrophone : useSystemAudio;
+        if (IsRecording || value == current)
+            return;
+        if (kind == AudioSourceKind.Microphone)
+        {
+            useMicrophone = value;
+            if (value)
+                microphoneDenied = false;
+        }
+        else
+            useSystemAudio = value;
+        await StartPreviewAsync();
+    }
+
+    public async Task StartAsync()
+    {
+        sourceError = null;
+        var devices = new List<AudioDevice>();
+        if (useMicrophone && selectedMicrophone is not null)
+            devices.Add(selectedMicrophone);
+        if (useSystemAudio && selectedOutput is not null)
+            devices.Add(selectedOutput);
+        if (devices.Count == 0)
+        {
+            sourceError = microphoneDenied
+                ? "Sem acesso ao microfone e sem saída de áudio do sistema. Libere o microfone ou ligue um dispositivo de saída."
+                : "Escolha ao menos uma fonte de áudio para gravar.";
+            Raise();
+            return;
+        }
+        await recording.StartAsync(devices);
+        if (!IsRecording)
+        {
+            // A sessão libera as fontes quando a abertura falha: reabre a pré-visualização.
+            running.Clear();
+            await StartPreviewAsync();
+        }
+        ReloadRecordings();
+        Raise();
+    }
+
+    /// <summary>
+    /// Logoff ou desligamento do Windows: para e salva sem diálogo (um diálogo bloquearia o desligamento)
+    /// e não reabre a pré-visualização. Sem gravação em curso, só marca o encerramento.
+    /// </summary>
+    public async Task StopForShutdownAsync()
+    {
+        shuttingDown = true;
+        if (IsRecording)
+            await recording.StopAsync();
+    }
+
+    /// <summary>Para e salva. O fim da gravação reabre o nível em <see cref="FinishedAsync"/>.</summary>
+    public Task StopAsync() => recording.StopAsync();
+
+    private void TogglePause()
+    {
+        if (IsPaused)
+            recording.Resume();
+        else
+            recording.Pause();
+    }
+
+    private Task ToggleAsync() => IsRecording ? StopAsync() : StartAsync();
+
+    private async Task SystemOnlyAsync()
+    {
+        await ChangeEnabledAsync(AudioSourceKind.Microphone, false);
+        await StartAsync();
+    }
+
+    private async Task RetryMicrophoneAsync()
+    {
+        useMicrophone = true;
+        await StartPreviewAsync();
+    }
+
+    private async Task AfterRecordingAsync()
+    {
+        // StopAsync da sessão aguarda o cronômetro, que libera as fontes; só então reabre o nível.
+        if (shuttingDown)
+            return;
+        running.Clear();
+        ReloadRecordings();
+        await StartPreviewAsync();
+    }
+
+    private void OnRecordingChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        var nowRecording = recording.IsRecording;
+        var ended = wasRecording && !nowRecording && !disposed;
+        wasRecording = nowRecording;
+        Raise();
+        if (ended)
+            _ = FinishedAsync();
+    }
+
+    /// <summary>Fim automático (disco cheio, limite de 2 h) ou por Stop: a sessão já salvou; reabre o nível.</summary>
+    private async Task FinishedAsync()
+    {
+        try
+        {
+            await recording.StopAsync();
+            await AfterRecordingAsync();
+        }
+        catch (ObjectDisposedException) { }
+    }
+
+    private void ReloadRecordings()
+    {
+        try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException) { recordings = []; }
+    }
+
+    private void Raise()
+    {
+        foreach (var command in new[] { Start, Stop, Toggle, SystemOnly, RetryMicrophone, RefreshDevices })
+            command.RaiseCanExecuteChanged();
+        PauseResume.RaiseCanExecuteChanged();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (disposed)
+            return;
+        disposed = true;
+        recording.PropertyChanged -= OnRecordingChanged;
+        foreach (var kind in running.Keys.ToArray())
+            await StopPreviewAsync(kind);
+    }
+}
