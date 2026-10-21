@@ -92,6 +92,7 @@ def open_operator_session(
     response.set_cookie(
         OPERATOR_SESSION_COOKIE,
         session_id,
+        secure=request.app.state.settings.OPERATOR_COOKIE_SECURE,
         httponly=True,
         path="/",
         samesite="lax",
@@ -107,6 +108,7 @@ def close_operator_session(request: Request) -> Response:
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.delete_cookie(
         OPERATOR_SESSION_COOKIE,
+        secure=request.app.state.settings.OPERATOR_COOKIE_SECURE,
         path="/",
         httponly=True,
         samesite="lax",

@@ -62,6 +62,7 @@ class Settings:
     SOURCE_URL_ENCRYPTION_KEY: str
     WEBHOOK_SECRET_ENCRYPTION_KEY: str | None
     OPERATOR_SECRET: str | None
+    OPERATOR_COOKIE_SECURE: bool
     ROLE: str
     S3_BUCKET: str
     S3_REGION: str
@@ -86,6 +87,10 @@ class Settings:
             WEBHOOK_SECRET_ENCRYPTION_KEY=os.getenv("WEBHOOK_SECRET_ENCRYPTION_KEY")
             or None,
             OPERATOR_SECRET=os.getenv("OPERATOR_SECRET") or None,
+            OPERATOR_COOKIE_SECURE=os.getenv("OPERATOR_COOKIE_SECURE", "true")
+            .strip()
+            .casefold()
+            not in {"false", "0", "no"},
             ROLE=os.getenv("APP_ROLE", "api").casefold(),
             S3_BUCKET=os.getenv("S3_BUCKET", "whisper-temporary"),
             S3_REGION=os.getenv("S3_REGION", "us-east-1"),

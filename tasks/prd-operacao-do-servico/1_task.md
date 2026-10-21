@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: done
 task_kind: vertical
 blocked_by: []
 gate: ".venv/bin/pytest -q -k v01_operator_session"

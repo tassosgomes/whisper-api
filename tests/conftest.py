@@ -265,11 +265,21 @@ def controlled_https_origin(
 
 
 @pytest.fixture
+def operator_cookie_secure_env(monkeypatch, request):
+    value = getattr(request, "param", None)
+    if value is None:
+        monkeypatch.delenv("OPERATOR_COOKIE_SECURE", raising=False)
+    else:
+        monkeypatch.setenv("OPERATOR_COOKIE_SECURE", value)
+
+
+@pytest.fixture
 def all_roles_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     controlled_https_origin: ControlledOrigin,
     controlled_s3_endpoint: str,
+    operator_cookie_secure_env,
 ):
     """Boot the real API + worker role composition in one process."""
     monkeypatch.setenv("DATABASE_URL", test_database_url())
@@ -292,7 +302,7 @@ def all_roles_client(
     monkeypatch.setenv("APP_OUTPUT_DIR", str(output_dir))
     monkeypatch.setattr("app.main.Transcriber", FakeTranscriber)
 
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="https://testserver") as test_client:
         test_client.app.state.test_source_url = controlled_https_origin.source_url
         test_client.app.state.test_source = controlled_https_origin
         yield test_client
@@ -321,6 +331,7 @@ def client(
     tmp_path: Path,
     controlled_https_origin: ControlledOrigin,
     controlled_s3_endpoint: str,
+    operator_cookie_secure_env,
 ):
     monkeypatch.setenv("DATABASE_URL", test_database_url())
     monkeypatch.setenv("SOURCE_URL_ENCRYPTION_KEY", TEST_SOURCE_URL_ENCRYPTION_KEY)
@@ -342,7 +353,7 @@ def client(
     monkeypatch.setenv("APP_OUTPUT_DIR", str(output_dir))
     monkeypatch.setattr("app.main.Transcriber", FakeTranscriber)
 
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="https://testserver") as test_client:
         test_client.app.state.test_source_url = controlled_https_origin.source_url
         test_client.app.state.test_source = controlled_https_origin
         yield test_client

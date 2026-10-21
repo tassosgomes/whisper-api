@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http.cookies import SimpleCookie
 from unittest.mock import Mock
 
 import pytest
@@ -106,6 +107,8 @@ def test_v01_operator_session_correct_secret_opens_httponly_cookie_and_console(c
     assert "httponly" in cookie_header.casefold()
     assert "path=/" in cookie_header.casefold()
     assert "samesite=lax" in cookie_header.casefold()
+    assert client.app.state.settings.OPERATOR_COOKIE_SECURE is True
+    assert SimpleCookie(cookie_header)["operator_session"]["secure"]
 
     screen = client.get("/operator")
     assert screen.status_code == 200
@@ -173,8 +176,47 @@ def test_v01_operator_session_close_invalidates_identifier(client):
     closed = client.delete("/v1/operator-sessions")
 
     assert closed.status_code == 204
+    deleted_cookie = SimpleCookie(closed.headers["set-cookie"])["operator_session"]
+    assert deleted_cookie["secure"]
+    assert deleted_cookie["httponly"]
+    assert deleted_cookie["samesite"].casefold() == "lax"
+    assert deleted_cookie["path"] == "/"
     assert client.cookies.get("operator_session") is None
     assert session_id not in client.app.state.operator_sessions
+    _assert_unauthorized(client.get("/v1/accounts"), "/v1/accounts")
+
+
+def test_v01_operator_session_secure_cookie_is_not_sent_over_http(client):
+    assert _open_session(client).status_code == 204
+    client.base_url = "http://testserver"
+
+    _assert_unauthorized(client.get("/v1/accounts"), "/v1/accounts")
+
+
+@pytest.mark.parametrize("operator_cookie_secure_env", ["false"], indirect=True)
+def test_v01_operator_session_local_http_can_disable_secure_cookie(client):
+    assert client.app.state.settings.OPERATOR_COOKIE_SECURE is False
+    client.base_url = "http://testserver"
+
+    opened = _open_session(client)
+
+    assert opened.status_code == 204
+    cookie = SimpleCookie(opened.headers["set-cookie"])["operator_session"]
+    assert not cookie["secure"]
+    assert cookie["httponly"]
+    assert cookie["samesite"].casefold() == "lax"
+    assert cookie["path"] == "/"
+    assert client.get("/v1/accounts").status_code == 200
+
+    closed = client.delete("/v1/operator-sessions")
+
+    assert closed.status_code == 204
+    deleted_cookie = SimpleCookie(closed.headers["set-cookie"])["operator_session"]
+    assert not deleted_cookie["secure"]
+    assert deleted_cookie["httponly"]
+    assert deleted_cookie["samesite"].casefold() == "lax"
+    assert deleted_cookie["path"] == "/"
+    assert client.cookies.get("operator_session") is None
     _assert_unauthorized(client.get("/v1/accounts"), "/v1/accounts")
 
 
