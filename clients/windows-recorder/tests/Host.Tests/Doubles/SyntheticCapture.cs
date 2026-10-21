@@ -34,6 +34,7 @@ public sealed class SyntheticCatalog : ICaptureDeviceCatalog
     public CaptureFormat MicrophoneFormat { get; set; } = new(48000, 2, 32, true);
     public CaptureFormat LoopbackFormat { get; set; } = new(44100, 2, 16, false);
     public event Action<string, bool>? DeviceAvailabilityChanged;
+    public event Action? DevicesChanged;
 
     public IReadOnlyList<AudioDevice> List(AudioSourceKind source)
     {
@@ -72,6 +73,7 @@ public sealed class SyntheticCatalog : ICaptureDeviceCatalog
         lock (sync)
             Devices.Remove(device);
         DeviceAvailabilityChanged?.Invoke(device.Id, false);
+        DevicesChanged?.Invoke();
     }
 
     public void Replug(AudioDevice device)
@@ -79,6 +81,41 @@ public sealed class SyntheticCatalog : ICaptureDeviceCatalog
         lock (sync)
             Devices.Add(device);
         DeviceAvailabilityChanged?.Invoke(device.Id, true);
+        DevicesChanged?.Invoke();
+    }
+
+    /// <summary>Dispositivo novo na lista (sem estar em uso).</summary>
+    public void Add(AudioDevice device)
+    {
+        lock (sync)
+            Devices.Add(device);
+        DevicesChanged?.Invoke();
+    }
+
+    /// <summary>Só o padrão do Windows muda; nenhum dispositivo entra, sai ou muda de estado.</summary>
+    public void ChangeDefault(AudioDevice newDefault)
+    {
+        lock (sync)
+        {
+            for (var i = 0; i < Devices.Count; i++)
+            {
+                if (Devices[i].Source == newDefault.Source)
+                    Devices[i] = Devices[i] with { IsDefault = Devices[i].Id == newDefault.Id };
+            }
+        }
+        DevicesChanged?.Invoke();
+    }
+
+    /// <summary>O fone some e outro dispositivo vira o padrão do Windows para a mesma fonte.</summary>
+    public void Replace(AudioDevice removed, AudioDevice newDefault)
+    {
+        lock (sync)
+        {
+            Devices.Remove(removed);
+            Devices.Add(newDefault);
+        }
+        DeviceAvailabilityChanged?.Invoke(removed.Id, false);
+        DevicesChanged?.Invoke();
     }
 
     public void Dispose() { }

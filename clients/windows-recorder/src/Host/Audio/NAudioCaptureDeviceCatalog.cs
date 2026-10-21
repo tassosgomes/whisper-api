@@ -16,14 +16,18 @@ public sealed class NAudioCaptureDeviceCatalog : ICaptureDeviceCatalog
         notifications = enumerator.CreateNotificationClient(false);
         notifications.DeviceStateChanged += (_, e) => Raise(e.DeviceId, e.NewState == DeviceState.Active);
         notifications.DeviceRemoved += (_, e) => Raise(e.DeviceId, false);
+        notifications.DeviceAdded += (_, _) => DevicesChanged?.Invoke();
+        notifications.DefaultDeviceChanged += (_, _) => DevicesChanged?.Invoke();
     }
 
     public event Action<string, bool>? DeviceAvailabilityChanged;
+    public event Action? DevicesChanged;
 
     private void Raise(string? id, bool available)
     {
         if (id is not null)
             DeviceAvailabilityChanged?.Invoke(id, available);
+        DevicesChanged?.Invoke();
     }
 
     private static DataFlow Flow(AudioSourceKind source) =>

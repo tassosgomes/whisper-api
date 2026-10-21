@@ -230,6 +230,86 @@ public sealed class V04HostShellTests : IAsyncDisposable
         await screen.StopForShutdownAsync(); // sem gravação: não faz nada
     }
 
+    private static readonly AudioDevice BuiltInMicrophone = new("mic-builtin", "Microfone do PC", AudioSourceKind.Microphone, true);
+    private static readonly AudioDevice BuiltInSpeakers = new("out-builtin", "Alto-falantes", AudioSourceKind.SystemLoopback, true);
+
+    [Fact]
+    public async Task StoppingAfterTheSelectedHeadsetVanishedFallsBackToTheDefaultWithoutAnyError()
+    {
+        await screen.RefreshDevicesAsync();
+        await screen.StartAsync();
+        Assert.True(screen.IsRecording);
+
+        // Bluetooth desligado: o fone era microfone e saída padrão; o PC assume como padrão.
+        catalog.Replace(SyntheticCatalog.Microphone, BuiltInMicrophone);
+        catalog.Replace(SyntheticCatalog.Speakers, BuiltInSpeakers);
+        await WaitUntil(() => screen.ActiveDeviceNote?.Contains("Alto-falantes") == true); // o loopback foi reaberto no novo padrão
+        Assert.Contains("Alto-falantes", screen.ActiveDeviceNote);
+        Assert.Contains("desconectado", screen.WarningText);
+
+        clock.UtcNow += TimeSpan.FromSeconds(2);
+        await screen.StopAsync();
+        await WaitUntil(() => screen.SelectedMicrophone == BuiltInMicrophone && screen.SelectedSystemOutput == BuiltInSpeakers);
+
+        Assert.Null(screen.PreviewError);
+        Assert.False(screen.HasError);
+        Assert.Null(screen.ActiveDeviceNote);
+        Assert.Equal(RecordingState.Saved, Assert.Single(recording.Recordings).State);
+        await WaitUntil(() => catalog.Opened.Any(s => s.Kind == AudioSourceKind.Microphone && s.IsStarted));
+        Assert.Equal("Nível 0%", screen.MicrophoneStatus);
+    }
+
+    [Fact]
+    public async Task DeviceListsFollowDevicesComingAndGoingOutsideRecording()
+    {
+        await screen.RefreshDevicesAsync();
+        Assert.Single(screen.Microphones);
+
+        var extra = new AudioDevice("mic-usb", "Microfone USB", AudioSourceKind.Microphone, false);
+        catalog.Add(extra);
+        await WaitUntil(() => screen.Microphones.Contains(extra));
+        Assert.Equal(SyntheticCatalog.Microphone, screen.SelectedMicrophone); // a escolha não muda
+
+        catalog.Unplug(extra);
+        await WaitUntil(() => !screen.Microphones.Contains(extra));
+
+        // O selecionado some: cai para o padrão atual, sem erro.
+        catalog.Replace(SyntheticCatalog.Microphone, BuiltInMicrophone);
+        await WaitUntil(() => screen.SelectedMicrophone == BuiltInMicrophone);
+        Assert.Equal([BuiltInMicrophone], screen.Microphones);
+        Assert.Null(screen.PreviewError);
+        Assert.True(catalog.Latest(AudioSourceKind.Microphone).IsStarted);
+
+        // Sem nenhum microfone: a fonte fica sem dispositivo, com texto neutro.
+        catalog.Unplug(BuiltInMicrophone);
+        await WaitUntil(() => screen.Microphones.Count == 0);
+        Assert.Equal("Sem dispositivo", screen.MicrophoneStatus);
+        Assert.Null(screen.PreviewError);
+    }
+
+    [Fact]
+    public async Task DeviceThatBecomesInactiveDisappearsComesBackWhenActiveAndDefaultChangesRefreshTheList()
+    {
+        // Bluetooth desligado: o endpoint continua existindo e só muda de estado (não ativo).
+        var headset = new AudioDevice("mic-q30", "Soundcore Q30", AudioSourceKind.Microphone, false);
+        catalog.Add(headset);
+        await screen.RefreshDevicesAsync();
+        Assert.Contains(headset, screen.Microphones);
+
+        catalog.Unplug(headset);
+        await WaitUntil(() => !screen.Microphones.Contains(headset));
+
+        catalog.Replug(headset);
+        await WaitUntil(() => screen.Microphones.Contains(headset));
+
+        // O Windows passa o padrão para o fone: a lista reflete o padrão e a escolha do usuário é mantida.
+        catalog.ChangeDefault(headset with { IsDefault = true });
+        await WaitUntil(() => screen.Microphones.Single(d => d.Id == headset.Id).IsDefault);
+        Assert.False(screen.Microphones.Single(d => d.Id == SyntheticCatalog.Microphone.Id).IsDefault);
+        Assert.Equal(SyntheticCatalog.Microphone.Id, screen.SelectedMicrophone?.Id);
+        Assert.Null(screen.PreviewError);
+    }
+
     [Fact]
     public void GlobalHotkeyFallsBackWhenAnotherProgramOwnsTheCombinationAndRaisesPressed()
     {

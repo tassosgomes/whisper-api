@@ -29,4 +29,6 @@ public interface ICaptureDeviceCatalog : IDisposable
     ICaptureSource Open(AudioDevice device);
     /// <summary>Id do dispositivo e se ele está ativo. Pode chegar em qualquer thread.</summary>
     event Action<string, bool>? DeviceAvailabilityChanged;
+    /// <summary>Entrada, saída, mudança de estado ou do dispositivo padrão. Pode chegar em qualquer thread.</summary>
+    event Action? DevicesChanged;
 }

@@ -11,7 +11,7 @@ namespace Whisper.Recorder.Host.Audio;
 /// Quando um dispositivo some, a fonte vira "perdida", o núcleo é avisado e o host tenta reabri-la
 /// (o mesmo dispositivo ou, se ele era o padrão, o novo padrão) até a fonte ser parada.
 /// </summary>
-public sealed class WasapiAudioCapture : IAudioCapture
+public sealed class WasapiAudioCapture : IAudioCapture, IAudioDeviceChanges
 {
     private const int AccessDenied = unchecked((int)0x80070005);
     private static readonly TimeSpan IdleLevelAfter = TimeSpan.FromMilliseconds(250);
@@ -33,12 +33,22 @@ public sealed class WasapiAudioCapture : IAudioCapture
         this.recoveryInterval = recoveryInterval ?? TimeSpan.FromSeconds(1);
         this.diagnostic = diagnostic;
         catalog.DeviceAvailabilityChanged += OnCatalogChanged;
+        catalog.DevicesChanged += OnCatalogDevicesChanged;
         idleTimer = new Timer(_ => PumpIdleLevels(), null, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(100));
     }
 
     public event Action<AudioPcmBlock>? BlockAvailable;
     public event Action<AudioLevel>? LevelChanged;
     public event Action<AudioDeviceAvailability>? DeviceAvailabilityChanged;
+    public event Action? DevicesChanged;
+
+    public AudioDevice? ActiveDevice(AudioSourceKind source)
+    {
+        lock (gate)
+            return channels.TryGetValue(source, out var channel) && !channel.Lost ? channel.ActiveDevice : null;
+    }
+
+    private void OnCatalogDevicesChanged() => DevicesChanged?.Invoke();
 
     public ValueTask<IReadOnlyList<AudioDevice>> ListDevicesAsync(
         AudioSourceKind source, CancellationToken cancellationToken = default)
@@ -138,6 +148,7 @@ public sealed class WasapiAudioCapture : IAudioCapture
             {
                 channel.Source = source;
                 channel.ActiveId = device.Id;
+                channel.ActiveDevice = device;
                 channel.Lost = false;
                 channel.LastDataAt = clock.UtcNow;
             }
@@ -233,6 +244,7 @@ public sealed class WasapiAudioCapture : IAudioCapture
         diagnostic?.Write(DiagnosticEvent.AudioDeviceLost);
         var kind = channel.Device.Source;
         DeviceAvailabilityChanged?.Invoke(new AudioDeviceAvailability(channel.Device, false));
+        DevicesChanged?.Invoke();
         LevelChanged?.Invoke(new AudioLevel(kind, 0));
         // Pode vir de um callback do sistema de áudio: nada de bloquear nem chamar de volta a pilha de áudio.
         _ = Task.Run(() =>
@@ -273,6 +285,7 @@ public sealed class WasapiAudioCapture : IAudioCapture
                     diagnostic?.Write(DiagnosticEvent.AudioDeviceRestored);
                     // O núcleo conhece o dispositivo pedido: o aviso de volta usa o dispositivo lógico.
                     DeviceAvailabilityChanged?.Invoke(new AudioDeviceAvailability(channel.Device, true));
+                    DevicesChanged?.Invoke();
                     return;
                 }
             }
@@ -327,6 +340,7 @@ public sealed class WasapiAudioCapture : IAudioCapture
         }
         idleTimer.Dispose();
         catalog.DeviceAvailabilityChanged -= OnCatalogChanged;
+        catalog.DevicesChanged -= OnCatalogDevicesChanged;
         foreach (var channel in all)
             Release(channel);
         catalog.Dispose();
@@ -337,6 +351,7 @@ public sealed class WasapiAudioCapture : IAudioCapture
     {
         public AudioDevice Device { get; } = device;
         public string ActiveId { get; set; } = device.Id;
+        public AudioDevice ActiveDevice { get; set; } = device;
         public ICaptureSource? Source { get; set; }
         public bool Lost { get; set; }
         public bool Stopping { get; set; }

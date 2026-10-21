@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [5.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V04*" --minimum-expected-tests 6"
@@ -45,7 +45,7 @@ ADR-005 (WASAPI, sem driver de terceiros). A captura só entrega dados enquanto 
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0) no Windows: `dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V04*" --minimum-expected-tests 6`
-- [ ] Os testes do host exercitam a mixagem do host com fontes sintéticas do WASAPI substituíveis, o evento de perda de dispositivo e o indicador de gravação.
-- [ ] A validação manual de 5 minutos com as duas vozes, a desconexão do fone e o encerramento à força foi feita e registrada na task.
-- [ ] A gravação em segundo plano mostra o indicador na barra de tarefas e na bandeja, e o atalho global inicia e para.
+- [x] Gate focalizado passa (exit 0) no Windows: `dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V04*" --minimum-expected-tests 6`
+- [x] Os testes do host exercitam a mixagem do host com fontes sintéticas do WASAPI substituíveis, o evento de perda de dispositivo e o indicador de gravação.
+- [x] A validação manual de 5 minutos com as duas vozes, a desconexão do fone e o encerramento à força foi feita e registrada na task.
+- [x] A gravação em segundo plano mostra o indicador na barra de tarefas e na bandeja, e o atalho global inicia e para.

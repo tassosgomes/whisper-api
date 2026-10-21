@@ -28,9 +28,14 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     private bool useSystemAudio = true;
     private bool microphoneDenied;
     private bool wasRecording;
-    private string? sourceError;
+    private readonly SynchronizationContext? context = SynchronizationContext.Current;
+    private string? startError;
+    private string? previewError;
+    private bool refreshing;
+    private bool refreshAgain;
     private bool disposed;
     private bool shuttingDown;
+    private bool initialized;
 
     public RecordingScreenViewModel(RecordingViewModel recording, IAudioCapture capture)
     {
@@ -43,6 +48,8 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
         SystemOnly = new AsyncRelayCommand(SystemOnlyAsync, () => !IsRecording);
         RetryMicrophone = new AsyncRelayCommand(RetryMicrophoneAsync, () => !IsRecording && MicrophoneDenied);
         RefreshDevices = new AsyncRelayCommand(RefreshDevicesAsync, () => !IsRecording);
+        if (capture is IAudioDeviceChanges changes)
+            changes.DevicesChanged += OnDevicesChanged;
         recording.PropertyChanged += OnRecordingChanged;
         ReloadRecordings();
     }
@@ -79,8 +86,33 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
 
     public string StateGlyph => !IsRecording ? "○" : IsPaused ? "⏸" : "●";
 
-    public string? Error => recording.Error ?? sourceError;
+    /// <summary>Falha ao iniciar a gravação.</summary>
+    public string? Error => recording.Error ?? startError;
     public bool HasError => Error is not null;
+    /// <summary>Problema ao abrir um dispositivo para mostrar o nível; não é falha de gravação.</summary>
+    public string? PreviewError => previewError;
+    public bool HasPreviewError => previewError is not null;
+
+    /// <summary>Quando uma fonte foi reaberta em outro dispositivo (o novo padrão), diz qual está em uso.</summary>
+    public string? ActiveDeviceNote
+    {
+        get
+        {
+            if (capture is not IAudioDeviceChanges changes)
+                return null;
+            var notes = new List<string>();
+            foreach (var (kind, selected, label) in new[]
+            {
+                (AudioSourceKind.Microphone, selectedMicrophone, "Microfone"),
+                (AudioSourceKind.SystemLoopback, selectedOutput, "Áudio do sistema")
+            })
+            {
+                if (selected is not null && changes.ActiveDevice(kind) is { } active && active.Id != selected.Id)
+                    notes.Add($"{label}: em uso {active.DisplayName}.");
+            }
+            return notes.Count == 0 ? null : string.Join(" ", notes);
+        }
+    }
     public string? EmptyListText => recordings.Count == 0 ? "Nenhuma gravação ainda." : null;
     public bool HasWarning => recording.Warnings.Count > 0;
 
@@ -141,6 +173,8 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
             return "Desligado";
         if (recording.Sources.TryGetValue(source, out var available) && !available)
             return "Desconectado";
+        if (!IsRecording && (source == AudioSourceKind.Microphone ? selectedMicrophone : selectedOutput) is null)
+            return "Sem dispositivo";
         if (!running.ContainsKey(source) && !IsRecording)
             return "Indisponível";
         return $"Nível {(int)Math.Round(Level(source) * 100)}%";
@@ -149,10 +183,17 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     /// <summary>Lista os dispositivos, escolhe os padrão do Windows e abre a pré-visualização do nível.</summary>
     public async Task RefreshDevicesAsync()
     {
+        initialized = true;
         microphones = await capture.ListDevicesAsync(AudioSourceKind.Microphone);
         outputs = await capture.ListDevicesAsync(AudioSourceKind.SystemLoopback);
         selectedMicrophone = Pick(microphones, selectedMicrophone);
         selectedOutput = Pick(outputs, selectedOutput);
+        // Um dispositivo que saiu da lista (fone desligado) é largado: a fonte cai para o padrão atual do Windows.
+        foreach (var (kind, selected) in new[] { (AudioSourceKind.Microphone, selectedMicrophone), (AudioSourceKind.SystemLoopback, selectedOutput) })
+        {
+            if (running.TryGetValue(kind, out var open) && open.Id != selected?.Id)
+                await StopPreviewAsync(kind);
+        }
         await StartPreviewAsync();
     }
 
@@ -163,7 +204,7 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     /// <summary>Abre (de modo idempotente) as fontes ligadas para mostrar o nível. Não grava nada.</summary>
     public async Task StartPreviewAsync()
     {
-        sourceError = null;
+        previewError = null;
         foreach (var (kind, device, enabled) in Selection())
         {
             if (!enabled || device is null)
@@ -188,7 +229,7 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
             {
                 // A mensagem da exceção pode conter dados do dispositivo: só texto fixo vai para a tela.
                 running.Remove(kind);
-                sourceError = "Não foi possível abrir um dispositivo de áudio. Escolha outro.";
+                previewError = "Não foi possível abrir o dispositivo de áudio selecionado. Escolha outro na lista.";
             }
         }
         Raise();
@@ -240,7 +281,8 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
 
     public async Task StartAsync()
     {
-        sourceError = null;
+        startError = null;
+        previewError = null;
         var devices = new List<AudioDevice>();
         if (useMicrophone && selectedMicrophone is not null)
             devices.Add(selectedMicrophone);
@@ -248,7 +290,7 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
             devices.Add(selectedOutput);
         if (devices.Count == 0)
         {
-            sourceError = microphoneDenied
+            startError = microphoneDenied
                 ? "Sem acesso ao microfone e sem saída de áudio do sistema. Libere o microfone ou ligue um dispositivo de saída."
                 : "Escolha ao menos uma fonte de áudio para gravar.";
             Raise();
@@ -308,7 +350,8 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
             return;
         running.Clear();
         ReloadRecordings();
-        await StartPreviewAsync();
+        // A lista é recarregada: o dispositivo escolhido pode ter saído durante a gravação.
+        await RefreshDevicesAsync();
     }
 
     private void OnRecordingChanged(object? sender, PropertyChangedEventArgs e)
@@ -332,6 +375,48 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
         catch (ObjectDisposedException) { }
     }
 
+    private void OnDevicesChanged()
+    {
+        if (disposed || shuttingDown)
+            return;
+        if (context is not null && SynchronizationContext.Current != context)
+            context.Post(_ => _ = HandleDevicesChangedAsync(), null);
+        else
+            _ = HandleDevicesChangedAsync();
+    }
+
+    /// <summary>Com a gravação em curso só atualiza a tela; a lista é recarregada ao terminar.</summary>
+    private async Task HandleDevicesChangedAsync()
+    {
+        if (disposed || shuttingDown)
+            return;
+        if (IsRecording || !initialized)
+        {
+            Raise();
+            return;
+        }
+        if (refreshing)
+        {
+            refreshAgain = true;
+            return;
+        }
+        refreshing = true;
+        try
+        {
+            do
+            {
+                refreshAgain = false;
+                await RefreshDevicesAsync();
+            }
+            while (refreshAgain);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A lista não pôde ser lida agora; a próxima notificação tenta de novo.
+        }
+        finally { refreshing = false; }
+    }
+
     private void ReloadRecordings()
     {
         try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
@@ -352,6 +437,8 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
             return;
         disposed = true;
         recording.PropertyChanged -= OnRecordingChanged;
+        if (capture is IAudioDeviceChanges changes)
+            changes.DevicesChanged -= OnDevicesChanged;
         foreach (var kind in running.Keys.ToArray())
             await StopPreviewAsync(kind);
     }

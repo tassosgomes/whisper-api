@@ -41,6 +41,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <CheckBox Grid.Row="0" Grid.Column="0" Content="Microfone" Margin="0,0,0,12"
@@ -72,6 +73,9 @@
                                  AutomationProperties.Name="Nível do áudio do sistema" />
                     <TextBlock Grid.Row="1" Grid.Column="3" VerticalAlignment="Center"
                                Text="{Binding SystemStatus}" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,8,0,0" Opacity="0.8"
+                               TextWrapping="Wrap" Text="{Binding ActiveDeviceNote}"
+                               Visibility="{Binding ActiveDeviceNote, Converter={StaticResource NullToVisibility}}" />
                 </Grid>
 
                 <!-- Windows negou o microfone -->
@@ -112,6 +116,9 @@
                 <ui:InfoBar Title="Atenção" Severity="Warning" IsClosable="False" Margin="0,0,0,12"
                             IsOpen="{Binding HasWarning, Mode=OneWay}"
                             Message="{Binding WarningText}" />
+                <ui:InfoBar Title="Dispositivo indisponível" Severity="Warning" IsClosable="False" Margin="0,0,0,12"
+                            IsOpen="{Binding HasPreviewError, Mode=OneWay}"
+                            Message="{Binding PreviewError}" />
                 <ui:InfoBar Title="Não foi possível gravar" Severity="Error" IsClosable="False" Margin="0,0,0,12"
                             IsOpen="{Binding HasError, Mode=OneWay}"
                             Message="{Binding Error}" />
