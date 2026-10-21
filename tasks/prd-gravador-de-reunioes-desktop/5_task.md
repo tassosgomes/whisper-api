@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [4.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V04*" --minimum-expected-tests 12"
@@ -44,10 +44,10 @@ WAV PCM 16 kHz mono 16 bits (TechSpec, Decisões Técnicas). Duração máxima d
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V04*" --minimum-expected-tests 12`
-- [ ] Mixagem de duas fontes sintéticas: a duração do arquivo é igual à do relógio, também com uma das fontes em silêncio por vários minutos.
-- [ ] Interromper a escrita no meio e reabrir deixa a gravação `interrupted`, legível e com o cabeçalho correto.
-- [ ] Pausa não entra na duração; as duas fontes desligadas não iniciam; o limite de 2 h salva e encerra; o disco cheio salva o que existe.
-- [ ] Perda de uma fonte durante a gravação mantém a gravação e registra o aviso.
-- [ ] O aviso de terceiros é exposto em todo início, sem exigir confirmação.
-- [ ] Nenhum teste faz requisição de rede.
+- [x] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V04*" --minimum-expected-tests 12`
+- [x] Mixagem de duas fontes sintéticas: a duração do arquivo é igual à do relógio, também com uma das fontes em silêncio por vários minutos.
+- [x] Interromper a escrita no meio e reabrir deixa a gravação `interrupted`, legível e com o cabeçalho correto.
+- [x] Pausa não entra na duração; as duas fontes desligadas não iniciam; o limite de 2 h salva e encerra; o disco cheio salva o que existe.
+- [x] Perda de uma fonte durante a gravação mantém a gravação e registra o aviso.
+- [x] O aviso de terceiros é exposto em todo início, sem exigir confirmação.
+- [x] Nenhum teste faz requisição de rede.

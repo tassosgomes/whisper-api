@@ -4,10 +4,10 @@
   "original_base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "target_ref": null,
-  "last_checkpoint": "c0edc03",
+  "last_checkpoint": "67b8c4b",
   "phase": "implement",
-  "active_task": "4.0",
-  "attempt": 1,
+  "active_task": "5.0",
+  "attempt": 2,
   "max_attempts": 3,
   "full_attempt": 0,
   "transport_retries": 0,
@@ -34,6 +34,16 @@
     {
       "task": "4.0",
       "note": "transport timeout after worker finished; reconciled, result implementation_complete"
+    },
+    {
+      "task": "4.0",
+      "checkpoint": "67b8c4b"
+    },
+    {
+      "task": "5.0",
+      "attempt": 1,
+      "result": "rejected",
+      "blocker": "B1 mixer descarta áudio tardio"
     }
   ]
 }

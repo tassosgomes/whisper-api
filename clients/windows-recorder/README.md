@@ -6,8 +6,8 @@ raiz do repositório.
 
 | Projeto | Alvo | Fronteira |
 |---|---|---|
-| `src/Core` | `net10.0` | Portas, tempo, diagnóstico e cliente da API gerado |
-| `src/Presentation` | `net10.0` | ViewModels das próximas fatias, sem referências WPF |
+| `src/Core` | `net10.0` | Portas, gravação local, tempo, diagnóstico e cliente da API gerado |
+| `src/Presentation` | `net10.0` | ViewModel de gravação, sem referências WPF |
 | `src/Host` | `net10.0-windows` | Shell WPF com WPF-UI; adaptadores Windows nas próximas fatias |
 | `tests/Core.Tests` | `net10.0` | Núcleo e apresentação, xUnit/MTP e dublês das portas |
 | `tests/Host.Tests` | `net10.0-windows` | Projeto reservado aos testes Windows; ainda sem testes |
@@ -69,6 +69,48 @@ reutilizáveis ficam em `tests/Core.Tests/Doubles`; o agendador registra esperas
 sem dormir, e o relógio é controlado pelo teste.
 O projeto `Host.Tests` fica sem testes até as fatias Windows; sua execução vazia
 também reprova, por isso o CI Linux seleciona apenas `Core.Tests`.
+
+## Gravação local (V-04)
+
+Na abertura, o host cria `RecordingRepository` e chama `RecoverInterrupted()`
+antes de criar a sessão. A raiz padrão é
+`%LOCALAPPDATA%\Whisper\Recorder\recordings`; cada UUID contém `audio.wav` e
+`metadata.json`. A recuperação recalcula os tamanhos do WAV pelo arquivo,
+descarta um eventual byte incompleto e muda `recording` para `interrupted`.
+Metadados são escritos em temporário, sincronizados e renomeados atomicamente.
+
+`RecordingSession` recebe a porta de captura, `IClock`, `IScheduler`, repositório
+e, opcionalmente, `IDiskSpace`. O host fornece dispositivos selecionados a
+`StartAsync`, usa `Pause`, `Resume`, `StopAsync` e descarta a sessão no fechamento
+normal. A sessão não descarta a porta de captura, que pertence ao host.
+`SystemScheduler` dirige ticks de 100 ms, independentemente dos pacotes de áudio;
+`Tick` também está disponível para relógios controlados nos testes.
+
+Os timestamps posicionam cada fonte no tempo ativo, excluindo as pausas.
+Os blocos PCM são convertidos para mono 16 kHz, cada fonte recebe ganho 0,5
+e a soma vira WAV de 16 bits. Ausência de pacotes insere silêncio. O buffer
+aceita até 5 s adiante. Como cada bloco chega depois do período que cobre,
+o tick grava só até o relógio menos `JitterMargin` (500 ms); pausar, parar e
+o limite de 2 h completam esse trecho. Um bloco entregue com mais de 500 ms de
+atraso perde a parte já persistida, que não pode ser reescrita.
+Cabeçalho e metadados têm checkpoint durável a cada segundo, e também ao
+pausar/parar. O aviso de limite surge aos 115 min e o salvamento aos 120 min.
+Há aviso abaixo de 50 MiB livres, parada antes de esgotar a margem de escrita
+e reserva de 64 KiB por gravação, liberada na finalização/recuperação.
+
+`RecordingViewModel` expõe duração, estado, níveis, fontes, avisos, lista e aviso
+de terceiros em cada início. Suas notificações usam o `SynchronizationContext`
+da criação quando disponível. Não usa WPF nem rede. A captura real e as telas
+continuam a cargo do host Windows (task 6.0).
+
+```bash
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V04*" --minimum-expected-tests 12
+```
+
+Os testes usam fontes sintéticas, relógio controlado, arquivos temporários e um
+agendador que aguarda pulsos explícitos. O teste de recuperação inicia outro
+processo .NET, aguarda um checkpoint, encerra-o à força e reabre os arquivos.
+Não usa rede, MinIO nem dispositivos reais.
 
 ## Regenerar o cliente da API
 

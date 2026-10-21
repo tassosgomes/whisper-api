@@ -6,6 +6,7 @@ public sealed class FakeAudioCapture : IAudioCapture
 {
     public List<AudioDevice> Devices { get; } = [];
     public HashSet<AudioSourceKind> ActiveSources { get; } = [];
+    public AudioSourceKind? DeniedSource { get; set; }
     public event Action<AudioPcmBlock>? BlockAvailable;
     public event Action<AudioLevel>? LevelChanged;
     public event Action<AudioDeviceAvailability>? DeviceAvailabilityChanged;
@@ -21,6 +22,8 @@ public sealed class FakeAudioCapture : IAudioCapture
     {
         cancellationToken.ThrowIfCancellationRequested();
         ActiveSources.Add(device.Source);
+        if (device.Source == DeniedSource)
+            throw new UnauthorizedAccessException("Test capture permission denied.");
         return ValueTask.CompletedTask;
     }
 

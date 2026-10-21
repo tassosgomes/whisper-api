@@ -79,7 +79,7 @@ O orquestrador deve entregar as tasks de Windows a uma sessão Windows. As tasks
 - [x] 2.0 Concluir o envio e criar o job
 - [ ] 3.0 Expurgar envio abandonado e encerrar a idempotência com o job
 - [x] 4.0 Preparar a solução do cliente e a execução dos testes no Linux
-- [ ] 5.0 Gravar a reunião e guardar a gravação no PC (núcleo)
+- [x] 5.0 Gravar a reunião e guardar a gravação no PC (núcleo)
 - [ ] 6.0 Gravar a reunião e guardar a gravação no PC (host Windows)
 - [ ] 7.0 Configurar o acesso à API (núcleo)
 - [ ] 8.0 Configurar o acesso à API (host Windows)
