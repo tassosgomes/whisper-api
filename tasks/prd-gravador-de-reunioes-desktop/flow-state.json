@@ -4,9 +4,9 @@
   "original_base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "target_ref": null,
-  "last_checkpoint": "05ebff3",
+  "last_checkpoint": "d02add8",
   "phase": "implement",
-  "active_task": "3.0",
+  "active_task": "9.0",
   "attempt": 1,
   "max_attempts": 3,
   "full_attempt": 0,
@@ -53,6 +53,10 @@
     {
       "task": "7.0",
       "checkpoint": "05ebff3"
+    },
+    {
+      "task": "3.0",
+      "checkpoint": "d02add8"
     }
   ]
 }

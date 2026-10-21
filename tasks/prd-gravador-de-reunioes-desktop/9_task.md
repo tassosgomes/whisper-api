@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [2.0, 5.0, 7.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V06*" --minimum-expected-tests 14"
@@ -44,10 +44,10 @@ Contrato 1.1.0. O `PUT` repete o arquivo inteiro. A URL de envio é segredo temp
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V06*" --minimum-expected-tests 14`
-- [ ] Envio completo contra a API real do repositório termina em `processing` com o `jobId` nos metadados.
-- [ ] Queda entre o `PUT` e o `complete`, e entre o `complete` e a resposta, seguida de nova tentativa, resulta em um só job.
-- [ ] Nova tentativa horas depois (relógio avançado) não cria segundo job; URL vencida é renovada com a mesma chave.
-- [ ] Checksum divergente recusa o envio e a tentativa seguinte usa chave nova; `401` e `429` produzem as mensagens e o comportamento esperados.
-- [ ] Nenhum teste encontra a URL de envio ou a API Key em arquivo ou diário.
-- [ ] Sem API configurada nada é enviado.
+- [x] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V06*" --minimum-expected-tests 14`
+- [x] Envio completo contra a API real do repositório termina em `processing` com o `jobId` nos metadados.
+- [x] Queda entre o `PUT` e o `complete`, e entre o `complete` e a resposta, seguida de nova tentativa, resulta em um só job.
+- [x] Nova tentativa horas depois (relógio avançado) não cria segundo job; URL vencida é renovada com a mesma chave.
+- [x] Checksum divergente recusa o envio e a tentativa seguinte usa chave nova; `401` e `429` produzem as mensagens e o comportamento esperados.
+- [x] Nenhum teste encontra a URL de envio ou a API Key em arquivo ou diário.
+- [x] Sem API configurada nada é enviado.

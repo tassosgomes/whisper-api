@@ -24,6 +24,8 @@ public sealed class RecordingRepository
     public string AudioPath(Guid id) => Path.Combine(DirectoryFor(id), "audio.wav");
     private string MetadataPath(Guid id) => Path.Combine(DirectoryFor(id), "metadata.json");
 
+    public RecordingMetadata Read(Guid id) => JsonSerializer.Deserialize<RecordingMetadata>(File.ReadAllText(MetadataPath(id)), JsonOptions)!;
+
     internal void Create(RecordingMetadata metadata)
     {
         Directory.CreateDirectory(DirectoryFor(metadata.Id));

@@ -36,6 +36,12 @@ Essa preparação também é necessária no CI que execute a suíte completa.
 Os testes iniciam a API real em um processo filho e usam HTTP em loopback;
 não pule esses testes quando o ambiente Python estiver ausente.
 
+V-06 também usa PostgreSQL local de testes (o serviço `postgres-test`, porta
+55432 por padrão) e `moto[server]` para o bucket simulado. A fixture cria e remove
+um schema aleatório próprio, sem limpar tabelas de outras execuções. Aceita
+`TEST_DATABASE_URL` ou as variáveis `TEST_POSTGRES_*` e `TEST_DATABASE_HOST`
+usadas pela suíte Python; exige banco com `test` no nome e host local.
+
 O build da solução inclui os cinco projetos, inclusive o XAML do host e o projeto
 de testes Windows, com `EnableWindowsTargeting=true`. Foi verificado no Linux
 com SDK 10.0.400: 0 erros, 0 warnings. Não houve necessidade de excluir o host
@@ -196,6 +202,45 @@ Após regenerar, compile e revise o diff. O CI regenera e exige ausência de dif
 nos arquivos gerados. O endereço base gerado é `/v1`; `ApiAccessProbe` fornece
 o endereço absoluto da implantação no adaptador e a chave no cabeçalho da
 consulta de validação. O smoke da estrutura não envia requisições.
+
+## Envio para transcrição (V-06)
+
+O host compartilha um `UploadCoordinator` entre as telas e mantém o
+`UploadTransport` vivo até fechar o app. O coordenador recebe repositório,
+configuração, cofre, transporte, relógio e diagnóstico opcional. O transporte
+usa o cliente gerado para as duas operações da API e um cliente HTTP separado
+para o armazenamento; a chave nunca acompanha o `PUT`. Não há middleware de
+retry, redirecionamento nem log HTTP.
+
+`UploadViewModel.Prepare(id)` obtém título, duração e tamanho para o diálogo de
+confirmação. Só a ação explícita `ConfirmAndSendAsync` envia o áudio. Quando
+`Confirmation.HasTranscription` é verdadeiro, o host também deve obter a
+confirmação de reenvio e passar `existingTranscriptionConfirmed: true`.
+`ConfigurationRequested` abre configurações na ausência de acesso ou em 401.
+`Progress`, `IsSending`, `Result.Message` e `Result.RetryAt` alimentam a tela
+Windows da task 10.0; criar o ViewModel ou reabrir arquivos não envia nada.
+
+Os metadados guardam tentativa, `uploadId`, `jobId`, `PutCompleted`, recusa,
+problema e prazo de retry. `saved`/`interrupted` passa a `uploading` e, depois do
+aceite, `processing`. Em falha, o áudio permanece intacto e a etapa fica
+disponível à próxima ação manual. A chave de idempotência deriva do UUID e da
+tentativa: só uma recusa durável ou um reenvio de gravação transcrita incrementa
+a tentativa existente. O pedido repetido recupera um job já criado mesmo se a
+resposta do `complete` se perdeu; `PutCompleted` evita repetir bytes quando só
+falta concluir. Em `UPLOAD_NOT_RECEIVED`, a próxima ação repete o arquivo todo.
+Um 403 do armazenamento renova a URL uma única vez com a mesma chave. `429`
+persiste `Retry-After` e impede nova chamada antes do prazo, inclusive ao reabrir.
+URL assinada e chave ficam apenas em memória; erros expõem mensagens fixas.
+
+```bash
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V06*" --minimum-expected-tests 14
+```
+
+Os testes usam a API, autenticação e gerenciador de envios reais, PostgreSQL
+isolado e HTTP para o S3 simulado. Injetam quedas antes/depois das respostas,
+avançam o relógio da API em cinco horas e verificam job único, checksum,
+limites, confirmação, progresso e ausência de segredos em arquivos/diagnóstico.
+Não iniciam worker de transcrição; o acompanhamento pertence à task 11.0.
 
 ## Diagnóstico e dependências
 
