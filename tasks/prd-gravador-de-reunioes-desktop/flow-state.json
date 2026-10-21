@@ -4,9 +4,9 @@
   "original_base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "target_ref": null,
-  "last_checkpoint": "3584b6d",
+  "last_checkpoint": "c0edc03",
   "phase": "implement",
-  "active_task": "2.0",
+  "active_task": "4.0",
   "attempt": 1,
   "max_attempts": 3,
   "full_attempt": 0,
@@ -26,6 +26,14 @@
     {
       "task": "1.0",
       "checkpoint": "3584b6d"
+    },
+    {
+      "task": "2.0",
+      "checkpoint": "c0edc03"
+    },
+    {
+      "task": "4.0",
+      "note": "transport timeout after worker finished; reconciled, result implementation_complete"
     }
   ]
 }

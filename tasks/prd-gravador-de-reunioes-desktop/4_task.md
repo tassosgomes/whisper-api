@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: enabling
 blocked_by: []
 gate: "dotnet build clients/windows-recorder -warnaserror"
@@ -47,9 +47,9 @@ ADR-005: .NET e WPF, código em `clients/windows-recorder/`. `net10.0` e `net10.
 
 ## Pronto quando
 
-- [ ] Gate de build passa (exit 0): `dotnet build clients/windows-recorder -warnaserror`
-- [ ] O teste de fumaça roda com `--minimum-expected-tests 1`, e um filtro que não casa com nada reprova com exit diferente de zero.
-- [ ] A geração do cliente da API a partir de `api-contract.yaml` é reproduzível por um comando documentado, e o código gerado compila.
-- [ ] As portas do host estão definidas no núcleo e têm dublês para os testes.
-- [ ] Está registrado se o host compila no Linux com alvo Windows, e o comando de filtro por classe que as demais tasks usam.
-- [ ] O fluxo de CI executa build, formatação e testes do núcleo.
+- [x] Gate de build passa (exit 0): `dotnet build clients/windows-recorder -warnaserror`
+- [x] O teste de fumaça roda com `--minimum-expected-tests 1`, e um filtro que não casa com nada reprova com exit diferente de zero.
+- [x] A geração do cliente da API a partir de `api-contract.yaml` é reproduzível por um comando documentado, e o código gerado compila.
+- [x] As portas do host estão definidas no núcleo e têm dublês para os testes.
+- [x] Está registrado se o host compila no Linux com alvo Windows, e o comando de filtro por classe que as demais tasks usam.
+- [x] O fluxo de CI executa build, formatação e testes do núcleo.

@@ -1,0 +1,57 @@
+name: Windows recorder
+
+on:
+  push:
+    paths:
+      - 'clients/windows-recorder/**'
+      - 'global.json'
+      - 'tasks/prd-gravador-de-reunioes-desktop/api-contract.yaml'
+      - '.github/workflows/windows-recorder.yml'
+  pull_request:
+    paths:
+      - 'clients/windows-recorder/**'
+      - 'global.json'
+      - 'tasks/prd-gravador-de-reunioes-desktop/api-contract.yaml'
+      - '.github/workflows/windows-recorder.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    env:
+      TESTINGPLATFORM_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check generated API client
+        run: |
+          python -m pip install PyYAML==6.0.3
+          python clients/windows-recorder/scripts/generate_api.py
+          git diff --exit-code -- clients/windows-recorder/src/Core/Api/Generated
+          git ls-files --others --exclude-standard -- clients/windows-recorder/src/Core/Api/Generated > untracked-generated.txt
+          test ! -s untracked-generated.txt
+      - name: Build all projects (including Windows targets)
+        run: dotnet build clients/windows-recorder -warnaserror
+      - name: Verify formatting
+        run: dotnet format clients/windows-recorder --verify-no-changes
+      - name: Run core tests
+        run: dotnet test --project clients/windows-recorder/tests/Core.Tests --minimum-expected-tests 1
+      - name: Verify class filter
+        run: dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class Whisper.Recorder.Core.Tests.SmokeTests --minimum-expected-tests 1
+      - name: Reject an empty class filter
+        shell: bash
+        run: |
+          set +e
+          dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class Whisper.Recorder.Core.Tests.DoesNotExist --minimum-expected-tests 1 > empty-filter.log 2>&1
+          filter_status=$?
+          set -e
+          cat empty-filter.log
+          test "$filter_status" -ne 0
+          grep -qi 'tests ran 0\|zero tests ran' empty-filter.log

@@ -15,3 +15,12 @@ data/output/*
 models/*
 !models/.gitkeep
 data
+
+# Cliente .NET
+**/bin/
+**/obj/
+**/TestResults/
+**/.kiota.log
+.vs/
+*.user
+*.suo

@@ -13,7 +13,7 @@ sources: tasks/prd-gravador-de-reunioes-desktop/prd.md@1.1, tasks/prd-gravador-d
 > **TechSpec de origem:** [techspec.md](techspec.md), aprovada em 2026-10-21
 > **Escopo:** Full-stack (API Python no Linux; cliente .NET com núcleo no Linux e host no Windows)
 > **ADRs pertinentes:** [ADR-001](../../docs/adr/adr-001.md), [ADR-005](../../docs/adr/adr-005.md)
-> **Status do plano:** Aprovado em 2026-10-21; execução em andamento, tasks 1.0 e 2.0 concluídas
+> **Status do plano:** Aprovado em 2026-10-21; execução em andamento, tasks 1.0, 2.0 e 4.0 concluídas
 
 ## Visão Geral
 
@@ -78,7 +78,7 @@ O orquestrador deve entregar as tasks de Windows a uma sessão Windows. As tasks
 - [x] 1.0 Pedir a URL de envio de áudio
 - [x] 2.0 Concluir o envio e criar o job
 - [ ] 3.0 Expurgar envio abandonado e encerrar a idempotência com o job
-- [ ] 4.0 Preparar a solução do cliente e a execução dos testes no Linux
+- [x] 4.0 Preparar a solução do cliente e a execução dos testes no Linux
 - [ ] 5.0 Gravar a reunião e guardar a gravação no PC (núcleo)
 - [ ] 6.0 Gravar a reunião e guardar a gravação no PC (host Windows)
 - [ ] 7.0 Configurar o acesso à API (núcleo)

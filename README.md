@@ -80,6 +80,33 @@ O smoke usa `S3_SMOKE_BUCKET` (padrão `whisper-temporary`),
 `S3_SMOKE_ACCESS_KEY_ID` e `S3_SMOKE_SECRET_ACCESS_KEY` (padrões root locais
 do Compose). Sem `S3_SMOKE_ENDPOINT`, os dois testes ficam ignorados.
 
+## Cliente gravador Windows (.NET)
+
+A solução fica em [`clients/windows-recorder/`](clients/windows-recorder/README.md).
+Requer SDK .NET 10. Na raiz do repositório, no Linux ou Windows:
+
+```bash
+dotnet build clients/windows-recorder -warnaserror
+dotnet format clients/windows-recorder --verify-no-changes
+dotnet test --project clients/windows-recorder/tests/Core.Tests --minimum-expected-tests 1
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class Whisper.Recorder.Core.Tests.SmokeTests --minimum-expected-tests 1
+```
+
+O runner é Microsoft.Testing.Platform com xUnit. O último comando fixa a sintaxe
+de filtro por classe para as próximas tasks: substitua o nome completo da classe.
+Um filtro sem correspondência deve retornar exit diferente de zero.
+O build inclui núcleo e apresentação `net10.0`, host WPF e projeto de testes do
+host `net10.0-windows`, com `EnableWindowsTargeting`. A compilação XAML foi
+verificada no Linux; executar a interface e os testes do host exige Windows.
+No Windows, abra `clients/windows-recorder/Whisper.Recorder.slnx` ou execute:
+
+```powershell
+dotnet run --project clients/windows-recorder/src/Host
+```
+
+O host é apenas a estrutura inicial, sem comportamento de gravação nesta etapa.
+Consulte o README do cliente para regenerar a API, as convenções e as licenças.
+
 ## Preparar a imagem e os modelos
 
 Faça o build enquanto houver internet:
