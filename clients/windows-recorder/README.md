@@ -265,3 +265,46 @@ Referências de configuração:
 [xUnit/MTP](https://xunit.net/docs/getting-started/v3/microsoft-testing-platform),
 [dotnet test/MTP](https://learn.microsoft.com/dotnet/core/tools/dotnet-test-mtp),
 [Kiota/.NET](https://learn.microsoft.com/openapi/kiota/quickstarts/dotnet).
+
+## Acompanhamento e resultado local (V-07)
+
+O host compartilha a mesma instância de `RecordingRepository` entre
+`UploadCoordinator` e `JobTracker`, mantém os dois transportes vivos e inicia
+`JobTracker.RunAsync` na abertura, com cancelamento no fechamento. O tracker
+acompanha novos jobs aceitos e retoma metadados `uploading`/`processing` do disco.
+`IConnectivity` permite suspender HTTP sem alterar o estado; `SystemConnectivity`
+fornece a implementação padrão. `Changed` entrega `TrackingStatus` quando há
+mudança; a tarefa do host deve encaminhar esse evento para a thread da interface.
+`Status(id)` fornece a situação atual, a mensagem e `CanResend`.
+
+As consultas crescem de 2 para 4, 8, 16 e 30 segundos, com teto de 30 segundos.
+Falhas transitórias recuam para pelo menos 10 segundos, dobrando até 60 segundos.
+O prazo e o intervalo são persistidos e respeitados ao reabrir. A passagem local
+do scheduler é a cada 2 segundos e não faz HTTP antes do prazo. Não há retries
+ocultos do cliente HTTP, webhook ou consulta a estado operacional.
+
+Um PUT durável sem resposta de aceite recupera o mesmo job repetindo apenas
+`complete`; um upload interrompido antes do PUT concluído mostra que precisa de
+novo envio manual. O tracker nunca envia bytes de áudio. `failed` guarda o código
+público e `404` de job aceito vira `result-expired`; ambos permitem reenvio com
+nova tentativa pelo coordenador, sem reaproveitar um job terminal.
+
+Em conclusão, `result-v1.json` preserva os bytes recebidos e `transcription.txt`
+contém um trecho por linha, com `[HH:mm:ss.fff]` relativo ao início do áudio.
+Cada arquivo usa temporário, flush durável e renomeação; o estado `transcribed`
+só é persistido depois dos arquivos. Falha de armazenamento mantém o job em
+acompanhamento para tentar novamente. Versão desconhecida guarda o JSON bruto
+e sinaliza `UpdateRequired`, sem gerar texto daquela versão. Resultado vazio
+guarda os arquivos e sinaliza `EmptyTranscript`. A cópia transcrita deixa de
+consultar a API e independe da retenção. A notificação passa por `INotifier` após
+a persistência; falha do host ao notificar não desfaz o resultado local.
+
+```bash
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V07*" --minimum-expected-tests 12
+```
+
+V-07 usa a mesma preparação Python/PostgreSQL/S3 simulado de V-06, com HTTP real
+para a API e comandos privados para dirigir a fronteira do worker e a retenção.
+Relógio, scheduler e conectividade são controlados; erros de rede/5xx e um
+formato futuro de resultado usam interceptação HTTP. Não executa modelo de
+transcrição, dispositivo de áudio ou notificação real do Windows.

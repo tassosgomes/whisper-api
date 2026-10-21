@@ -7,6 +7,7 @@ using Whisper.Recorder.Core.Api.Generated.Models;
 using Whisper.Recorder.Core.Diagnostics;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Recording;
+using Whisper.Recorder.Core.Tracking;
 
 namespace Whisper.Recorder.Core.Uploading;
 
@@ -15,7 +16,7 @@ public sealed class UploadCoordinator(RecordingRepository recordings, ApiConfigu
     ICredentialVault vault, UploadTransport transport, IClock clock, DiagnosticLog? diagnostic = null)
 {
     // Also prevents double clicks through different presentation objects sharing this coordinator.
-    private readonly SemaphoreSlim operations = new(1, 1);
+    private readonly SemaphoreSlim operations = recordings.Operations;
     public event Action? Changed;
 
     public UploadConfirmation Prepare(Guid id)
@@ -53,14 +54,20 @@ public sealed class UploadCoordinator(RecordingRepository recordings, ApiConfigu
                 FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
             if (audio.Length != confirmation.SizeBytes) return new(UploadProblem.ConfirmationRequired);
             var checksum = Convert.ToBase64String(await SHA256.HashDataAsync(audio, cancellationToken).ConfigureAwait(false));
-            if (recording.UploadAttempt == 0 || recording.UploadRejected || confirmation.HasTranscription)
+            if (recording.UploadAttempt == 0 || recording.UploadRejected || confirmation.HasTranscription
+                || recording.State is RecordingState.Failed or RecordingState.ResultExpired)
                 recording = recording with
                 {
                     UploadAttempt = checked(recording.UploadAttempt + 1),
                     UploadId = null,
                     JobId = null,
                     PutCompleted = false,
-                    UploadRejected = false
+                    UploadRejected = false,
+                    PublicJobStatus = null,
+                    FailureCode = null,
+                    TrackingProblem = TrackingProblem.None,
+                    NextPollAt = null,
+                    PollDelaySeconds = 0
                 };
             recording = recording with { State = RecordingState.Uploading, UploadProblem = UploadProblem.None, UploadRetryAt = null };
             Save(recording); // Commit the attempt before any remote side effect.

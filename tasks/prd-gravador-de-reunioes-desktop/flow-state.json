@@ -4,9 +4,9 @@
   "original_base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "base_ref": "dd8453da758d8b7ccd76a7d6b55688e910b6d969",
   "target_ref": null,
-  "last_checkpoint": "d02add8",
+  "last_checkpoint": "deb897a",
   "phase": "implement",
-  "active_task": "9.0",
+  "active_task": "11.0",
   "attempt": 1,
   "max_attempts": 3,
   "full_attempt": 0,
@@ -57,6 +57,11 @@
     {
       "task": "3.0",
       "checkpoint": "d02add8"
+    },
+    {
+      "task": "9.0",
+      "checkpoint": "deb897a",
+      "note": "integrator transport failure após commit; reconciliado"
     }
   ]
 }

@@ -6,7 +6,7 @@ processing/polling belongs to V-07. The private IPC protocol never logs secrets.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -132,6 +132,7 @@ def main():
             DownloadStartMetrics(),
         )
         app.state.uploads = UploadManager(engine, cipher, store, pending_limit=1000)
+        app.state.object_store = store
         requests = []
 
         @app.middleware("http")
@@ -206,6 +207,35 @@ def main():
                         record = session.get(TranscriptionUpload, command["uploadId"])
                         record.status = "rejected"
                         record.failure_code = "UPLOAD_CHECKSUM_MISMATCH"
+                    emit({"ok": True})
+                elif operation == "job_state":
+                    # V-07 drives the worker boundary, leaving public API/auth,
+                    # database queries, result storage and retention real.
+                    with Session(engine) as session, session.begin():
+                        job = session.get(TranscriptionJob, command["jobId"])
+                        job.status = command["status"]
+                        if job.status in {"completed", "failed"}:
+                            job.terminal_at = datetime.now(timezone.utc)
+                        job.failure_code = command.get("failureCode")
+                        if job.status == "completed":
+                            result = {
+                                "schemaVersion": 1,
+                                "jobId": job.id,
+                                "language": "pt-BR",
+                                "durationMs": 4000000,
+                                "segments": command.get("segments", []),
+                            }
+                            job.result_object_key = f"results/{job.id}/result-v1.json"
+                            store.client.put_object(
+                                Bucket=store.bucket,
+                                Key=job.result_object_key,
+                                Body=json.dumps(result).encode(),
+                                ContentType="application/json",
+                            )
+                        if command.get("expired"):
+                            job.terminal_at = datetime.now(timezone.utc) - timedelta(
+                                hours=25
+                            )
                     emit({"ok": True})
                 elif operation == "evidence":
                     with Session(engine) as session:

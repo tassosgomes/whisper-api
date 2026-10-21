@@ -1,9 +1,10 @@
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Uploading;
+using Whisper.Recorder.Core.Tracking;
 
 namespace Whisper.Recorder.Core.Recording;
 
-public enum RecordingState { Recording, Saved, Interrupted, Uploading, Processing, Transcribed }
+public enum RecordingState { Recording, Saved, Interrupted, Uploading, Processing, Transcribed, Failed, [System.Text.Json.Serialization.JsonStringEnumMemberName("result-expired")] ResultExpired }
 public enum RecordingWarning { DeviceLost, LowDiskSpace, DiskFull, LimitApproaching, ServiceLimitReached, CaptureFailed }
 
 public sealed record RecordingMetadata(
@@ -20,7 +21,12 @@ public sealed record RecordingMetadata(
     bool PutCompleted = false,
     bool UploadRejected = false,
     UploadProblem UploadProblem = UploadProblem.None,
-    DateTimeOffset? UploadRetryAt = null);
+    DateTimeOffset? UploadRetryAt = null,
+    string? PublicJobStatus = null,
+    string? FailureCode = null,
+    TrackingProblem TrackingProblem = TrackingProblem.None,
+    DateTimeOffset? NextPollAt = null,
+    int PollDelaySeconds = 0);
 
 public interface IDiskSpace
 {

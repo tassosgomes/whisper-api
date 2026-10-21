@@ -12,6 +12,8 @@ public sealed class RecordingRepository
     };
 
     public string RootDirectory { get; }
+    // The host shares this repository between upload and tracking coordinators.
+    internal SemaphoreSlim Operations { get; } = new(1, 1);
 
     public RecordingRepository(string? rootDirectory = null)
     {

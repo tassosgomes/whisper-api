@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [9.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V07*" --minimum-expected-tests 12"
@@ -44,8 +44,8 @@ O acompanhamento é por consulta (RN-G08). A cópia local pertence ao usuário e
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V07*" --minimum-expected-tests 12`
-- [ ] Ciclo completo contra a API real do repositório: envio, `processing`, `completed`, `.txt` e `result-v1.json` gravados e gravação `transcribed`.
-- [ ] Reabrir o app no meio do `processing` retoma o acompanhamento; backoff após erro temporário; sem conexão não marca falha.
-- [ ] `404` após envio aceito vira `result-expired`; `failed` guarda o código; `schemaVersion` desconhecida preserva o JSON e a gravação.
-- [ ] Transcrição vazia é guardada e sinalizada; o `.txt` tem o tempo de cada trecho.
+- [x] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V07*" --minimum-expected-tests 12`
+- [x] Ciclo completo contra a API real do repositório: envio, `processing`, `completed`, `.txt` e `result-v1.json` gravados e gravação `transcribed`.
+- [x] Reabrir o app no meio do `processing` retoma o acompanhamento; backoff após erro temporário; sem conexão não marca falha.
+- [x] `404` após envio aceito vira `result-expired`; `failed` guarda o código; `schemaVersion` desconhecida preserva o JSON e a gravação.
+- [x] Transcrição vazia é guardada e sinalizada; o `.txt` tem o tempo de cada trecho.
