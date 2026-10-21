@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from app.access.models import Account, Credential
+from app.access.models import Account, AdministrativeAudit, Credential
 
 
 INITIAL_PERMISSIONS = ("transcriptions:create", "transcriptions:read")
@@ -22,6 +22,10 @@ KEY_PREFIX = "wsk_"
 
 class CredentialNotFound(LookupError):
     """Raised when an operator refers to an unknown credential or account."""
+
+
+class AccountNameRequired(ValueError):
+    """An account must have a nonblank name."""
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,80 @@ class CredentialStore:
 
     def __init__(self, engine: Engine):
         self._sessions = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def create_account(self, name: str) -> dict:
+        name = name.strip()
+        if not name:
+            raise AccountNameRequired("A conta precisa de um nome.")
+        with self._sessions.begin() as session:
+            account = Account(id=uuid4(), name=name)
+            session.add(account)
+            session.flush()
+            session.add(
+                AdministrativeAudit(
+                    actor="operational_credential",
+                    account_id=account.id,
+                    action="account_created",
+                    object_type="account",
+                    object_id=str(account.id),
+                )
+            )
+            session.flush()
+            return self._account_metadata(account, 0)
+
+    def list_accounts(self, page: int = 1, size: int = 10) -> dict:
+        with self._sessions() as session:
+            total = session.scalar(select(func.count()).select_from(Account))
+            rows = session.execute(
+                self._account_query()
+                .order_by(Account.name, Account.id)
+                .offset((page - 1) * size)
+                .limit(size)
+            ).all()
+            return {
+                "data": [
+                    self._account_metadata(account, count) for account, count in rows
+                ],
+                "pagination": {
+                    "page": page,
+                    "size": size,
+                    "total": total,
+                    "totalPages": (total + size - 1) // size,
+                },
+            }
+
+    def get_account(self, account_id: UUID) -> dict:
+        with self._sessions() as session:
+            row = session.execute(
+                self._account_query().where(Account.id == account_id)
+            ).one_or_none()
+            if row is None:
+                raise CredentialNotFound("Conta não encontrada.")
+            return self._account_metadata(*row)
+
+    @staticmethod
+    def _account_query():
+        credential_count = (
+            select(func.count(Credential.id))
+            .where(Credential.account_id == Account.id)
+            .correlate(Account)
+            .scalar_subquery()
+        )
+        return select(Account, credential_count)
+
+    @staticmethod
+    def _account_metadata(account: Account, credential_count: int) -> dict:
+        return {
+            "accountId": str(account.id),
+            "name": account.name,
+            "credentialCount": credential_count,
+            "webhookDestination": {
+                "configured": account.webhook_url is not None,
+                "active": account.webhook_url is not None
+                and account.webhook_disabled_at is None,
+                "url": account.webhook_url,
+            },
+        }
 
     def provision_account(self, account_name: str) -> tuple[dict, str]:
         account_id = uuid4()

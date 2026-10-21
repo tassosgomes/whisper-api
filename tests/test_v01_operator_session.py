@@ -115,7 +115,8 @@ def test_v01_operator_session_correct_secret_opens_httponly_cookie_and_console(c
     assert "Destinos de webhook" in screen.text
     assert "Fila e jobs" in screen.text
     assert "Tentativas de entrega" in screen.text
-    assert client.get("/v1/accounts").status_code == 404
+    # The account route is available once V-02 is implemented.
+    assert client.get("/v1/accounts").status_code == 200
 
 
 def test_v01_operator_session_wrong_or_unconfigured_secret_returns_401(

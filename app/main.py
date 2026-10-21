@@ -6,12 +6,20 @@ import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
+from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, StringConstraints
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.access.credentials import CredentialStore
+from app.access.credentials import (
+    AccountNameRequired,
+    CredentialNotFound,
+    CredentialStore,
+)
 from app.api.transcriptions import router
 from app.database import create_database_engine, database_url_from_env, upgrade_database
 from app.jobs.executor import JobManager
@@ -280,6 +288,60 @@ async def request_validation_to_problem(
 
 app.include_router(router)
 app.include_router(operator_router)
+
+
+class CreateAccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
+
+
+@app.post(
+    "/v1/accounts", status_code=status.HTTP_201_CREATED, operation_id="createAccount"
+)
+def create_account(
+    payload: CreateAccountRequest, request: Request, response: Response
+) -> dict:
+    try:
+        account = request.app.state.credential_store.create_account(payload.name)
+    except AccountNameRequired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Nome obrigatório",
+                "code": "ACCOUNT_NAME_REQUIRED",
+                "detail": "A conta precisa de um nome que a distinga das demais.",
+            },
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Location"] = f"/v1/accounts/{account['accountId']}"
+    response.headers["Cache-Control"] = "no-store"
+    return account
+
+
+@app.get("/v1/accounts", operation_id="listAccounts")
+def list_accounts(
+    request: Request,
+    response: Response,
+    page: int = Query(1, alias="_page", ge=1),
+    size: int = Query(10, alias="_size", ge=1, le=100),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return request.app.state.credential_store.list_accounts(page, size)
+
+
+@app.get("/v1/accounts/{accountId}", operation_id="getAccount")
+def get_account(accountId: UUID, request: Request, response: Response) -> dict:
+    try:
+        account = request.app.state.credential_store.get_account(accountId)
+    except CredentialNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return account
 
 
 @app.get("/metrics")

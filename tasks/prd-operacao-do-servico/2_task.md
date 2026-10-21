@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [1.0]
 gate: ".venv/bin/pytest -q -k v02_operator_account"
@@ -52,8 +52,8 @@ A trilha pertence a Acesso e Contas e commita junto com a mutação (`techspec.m
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v02_operator_account`
-- [ ] Conta criada aparece na lista pelo nome, com uma entrada de trilha sem segredo no mesmo commit.
-- [ ] Nome vazio responde `422 ACCOUNT_NAME_REQUIRED` e não deixa conta nem trilha.
-- [ ] Falha forçada na gravação da trilha não deixa conta criada.
-- [ ] Nenhuma resposta de conta contém segredo; conta inexistente responde `404`.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v02_operator_account`
+- [x] Conta criada aparece na lista pelo nome, com uma entrada de trilha sem segredo no mesmo commit.
+- [x] Nome vazio responde `422 ACCOUNT_NAME_REQUIRED` e não deixa conta nem trilha.
+- [x] Falha forçada na gravação da trilha não deixa conta criada.
+- [x] Nenhuma resposta de conta contém segredo; conta inexistente responde `404`.

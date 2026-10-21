@@ -170,7 +170,22 @@ _CONSOLE_PAGE = """<!doctype html>
   <main>
     <h1>Console operacional</h1>
     <button id="operator-logout" type="button">Encerrar sessão</button>
-    <section aria-labelledby="accounts-heading"><h2 id="accounts-heading">Contas</h2></section>
+    <section aria-labelledby="accounts-heading">
+      <h2 id="accounts-heading">Contas</h2>
+      <form id="account-create">
+        <label for="account-name">Nome da conta</label>
+        <input id="account-name" name="name" maxlength="200" required>
+        <button type="submit">Criar conta</button>
+      </form>
+      <p id="account-error" role="alert" hidden></p>
+      <p id="account-status" role="status"></p>
+      <ul id="account-list"></ul>
+      <nav aria-label="Páginas de contas">
+        <button id="accounts-previous" type="button" disabled>Anterior</button>
+        <span id="accounts-pagination"></span>
+        <button id="accounts-next" type="button" disabled>Próxima</button>
+      </nav>
+    </section>
     <section aria-labelledby="credentials-heading"><h2 id="credentials-heading">Credenciais</h2></section>
     <section aria-labelledby="destinations-heading"><h2 id="destinations-heading">Destinos de webhook</h2></section>
     <section aria-labelledby="queue-heading"><h2 id="queue-heading">Fila e jobs</h2></section>
@@ -181,6 +196,80 @@ _CONSOLE_PAGE = """<!doctype html>
       await fetch("/v1/operator-sessions", { method: "DELETE" });
       window.location.reload();
     });
+    const accountForm = document.getElementById("account-create");
+    const accountError = document.getElementById("account-error");
+    const accountStatus = document.getElementById("account-status");
+    const previousPage = document.getElementById("accounts-previous");
+    const nextPage = document.getElementById("accounts-next");
+    let accountPage = 1;
+
+    async function loadAccounts(page = 1) {
+      const response = await fetch(`/v1/accounts?_page=${page}&_size=10`);
+      if (response.status === 401) {
+        window.location.reload();
+        return;
+      }
+      if (!response.ok) throw new Error("Não foi possível carregar as contas.");
+      const result = await response.json();
+      const list = document.getElementById("account-list");
+      list.replaceChildren();
+      for (const account of result.data) {
+        const item = document.createElement("li");
+        item.textContent = `${account.name} (${account.accountId})`;
+        list.appendChild(item);
+      }
+      accountPage = result.pagination.page;
+      document.getElementById("accounts-pagination").textContent =
+        result.pagination.total === 0 ? "Nenhuma conta cadastrada." :
+        `Página ${accountPage} de ${result.pagination.totalPages}`;
+      previousPage.disabled = accountPage <= 1;
+      nextPage.disabled = accountPage >= result.pagination.totalPages;
+    }
+
+    function showAccountError(message) {
+      accountError.textContent = message;
+      accountError.hidden = false;
+    }
+
+    accountForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      accountError.hidden = true;
+      accountStatus.textContent = "";
+      const submit = accountForm.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        const response = await fetch("/v1/accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: accountForm.elements.name.value }),
+        });
+        if (response.status === 401) {
+          window.location.reload();
+          return;
+        }
+        if (!response.ok) {
+          const problem = await response.json();
+          showAccountError(problem.code === "ACCOUNT_NAME_REQUIRED" ?
+            "Informe o nome da conta." : "Não foi possível criar a conta.");
+          return;
+        }
+        const account = await response.json();
+        accountStatus.textContent = `Conta criada: ${account.name} (${account.accountId}).`;
+        accountForm.reset();
+        await loadAccounts();
+      } catch {
+        showAccountError("Não foi possível atualizar as contas. Consulte a lista antes de tentar novamente.");
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    previousPage.addEventListener("click", () => {
+      loadAccounts(accountPage - 1).catch((error) => showAccountError(error.message));
+    });
+    nextPage.addEventListener("click", () => {
+      loadAccounts(accountPage + 1).catch((error) => showAccountError(error.message));
+    });
+    loadAccounts().catch((error) => showAccountError(error.message));
   </script>
 </body>
 </html>"""

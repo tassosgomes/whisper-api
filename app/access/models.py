@@ -46,3 +46,24 @@ class Credential(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdministrativeAudit(Base):
+    """Allowlisted administrative facts, committed with the affected mutation."""
+
+    __tablename__ = "administrative_audit"
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid4
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    actor: Mapped[str] = mapped_column(String(32), nullable=False)
+    account_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)

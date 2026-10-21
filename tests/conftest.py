@@ -21,7 +21,7 @@ from moto.server import ThreadedMotoServer
 from sqlalchemy import delete
 from sqlalchemy.engine import URL, make_url
 
-from app.access.models import Account, Credential
+from app.access.models import Account, AdministrativeAudit, Credential
 from app.jobs.models import IdempotencyRecord, TranscriptionJob
 from app.main import app
 
@@ -297,6 +297,7 @@ def all_roles_client(
             connection.execute(delete(IdempotencyRecord))
             connection.execute(delete(TranscriptionJob))
             connection.execute(delete(Credential))
+            connection.execute(delete(AdministrativeAudit))
             connection.execute(delete(Account))
         store = test_client.app.state.object_store
         for prefix in ("media/", "results/"):
@@ -346,6 +347,7 @@ def client(
             connection.execute(delete(IdempotencyRecord))
             connection.execute(delete(TranscriptionJob))
             connection.execute(delete(Credential))
+            connection.execute(delete(AdministrativeAudit))
             connection.execute(delete(Account))
         store = test_client.app.state.object_store
         for prefix in ("media/", "results/"):
