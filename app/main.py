@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, status
@@ -541,6 +541,86 @@ def put_webhook_destination(
     if "verificationMaterial" in destination:
         response.status_code = status.HTTP_201_CREATED
         response.headers["Location"] = request.url.path
+    response.headers["Cache-Control"] = "no-store"
+    return destination
+
+
+class RotateWebhookMaterialRequest(ReasonRequest):
+    mode: Literal["planned", "immediate"]
+
+
+@app.post(
+    "/v1/accounts/{accountId}/webhook-destination/rotate",
+    operation_id="rotateWebhookMaterial",
+)
+def rotate_webhook_material(
+    accountId: UUID,
+    payload: RotateWebhookMaterialRequest,
+    request: Request,
+    response: Response,
+) -> dict:
+    if payload.mode == "immediate" and not payload.reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Motivo obrigatório",
+                "code": "REASON_REQUIRED",
+                "detail": "Informe o motivo antes de confirmar.",
+            },
+        )
+    try:
+        destination = request.app.state.webhook_config_store.rotate_material(
+            accountId, immediate=payload.mode == "immediate", reason=payload.reason
+        )
+    except WebhookAccountNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except WebhookDestinationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "DESTINATION_NOT_FOUND",
+                "detail": "Não há destino de webhook para rotacionar.",
+            },
+        ) from exc
+    except (SQLAlchemyError, WebhookConfigurationError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return destination
+
+
+@app.post(
+    "/v1/accounts/{accountId}/webhook-destination/deactivate",
+    operation_id="deactivateWebhookDestination",
+)
+def deactivate_webhook_destination(
+    accountId: UUID,
+    request: Request,
+    response: Response,
+    payload: ReasonRequest | None = Body(None),
+) -> dict:
+    if payload is None or not payload.reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "title": "Motivo obrigatório",
+                "code": "REASON_REQUIRED",
+                "detail": "Informe o motivo antes de confirmar.",
+            },
+        )
+    try:
+        destination = request.app.state.webhook_config_store.deactivate_destination(
+            accountId, payload.reason
+        )
+    except (WebhookAccountNotFound, WebhookDestinationNotFound) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "O recurso não está disponível."},
+        ) from exc
+    except (SQLAlchemyError, WebhookConfigurationError) as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
     response.headers["Cache-Control"] = "no-store"
     return destination
 

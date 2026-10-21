@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [5.0]
 gate: ".venv/bin/pytest -q -k v06_operator_destination_lifecycle"
@@ -48,8 +48,8 @@ Reusar a rotação e o `disable` existentes, com a trilha dentro do mesmo commit
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v06_operator_destination_lifecycle`
-- [ ] Rotação planejada mantém o material anterior válido por 72 horas, comprovado com relógio controlado.
-- [ ] Rotação imediata e desativação sem motivo respondem `422` e não alteram material nem destino.
-- [ ] Desativação com motivo cessa entregas, invalida materiais e mostra o destino inativo, com motivo na trilha.
-- [ ] Rotação de API Key e rotação de material não interferem uma na outra.
+- [x] Gate focalizado passa (exit 0): `.venv/bin/pytest -q -k v06_operator_destination_lifecycle`
+- [x] Rotação planejada mantém o material anterior válido por 72 horas, comprovado com relógio controlado.
+- [x] Rotação imediata e desativação sem motivo respondem `422` e não alteram material nem destino.
+- [x] Desativação com motivo cessa entregas, invalida materiais e mostra o destino inativo, com motivo na trilha.
+- [x] Rotação de API Key e rotação de material não interferem uma na outra.

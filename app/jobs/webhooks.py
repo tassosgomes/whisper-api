@@ -65,6 +65,10 @@ class WebhookDestinationRejected(WebhookConfigurationError):
     """The endpoint fails the pilot's destination policy."""
 
 
+class WebhookReasonRequired(ValueError):
+    """An operator containment action requires a nonblank reason."""
+
+
 class WebhookTransportFailure(RuntimeError):
     """A network failure eligible for retry until the delivery deadline."""
 
@@ -240,76 +244,133 @@ class WebhookConfigStore:
         }
 
     def rotate(self, account_id: UUID, *, immediate: bool = False) -> str:
+        with self._sessions.begin() as session:
+            account = self._locked_account(session, account_id)
+            return self._rotate(session, account, immediate=immediate)
+
+    def rotate_material(
+        self, account_id: UUID, *, immediate: bool = False, reason: str | None = None
+    ) -> dict:
+        reason = (reason or "").strip() or None
+        if immediate and reason is None:
+            raise WebhookReasonRequired("Informe o motivo antes de confirmar.")
+        with self._sessions.begin() as session:
+            account = self._locked_destination(session, account_id)
+            secret = self._rotate(session, account, immediate=immediate)
+            self._audit_lifecycle(
+                session,
+                account_id,
+                "webhook_material_rotated_immediate"
+                if immediate
+                else "webhook_material_rotated_planned",
+                reason,
+            )
+            return {
+                **self._destination_metadata(session, account),
+                "verificationMaterial": secret,
+            }
+
+    def deactivate_destination(self, account_id: UUID, reason: str | None) -> dict:
+        reason = (reason or "").strip()
+        if not reason:
+            raise WebhookReasonRequired("Informe o motivo antes de confirmar.")
+        with self._sessions.begin() as session:
+            account = self._locked_destination(session, account_id)
+            self._disable(session, account)
+            self._audit_lifecycle(
+                session, account_id, "webhook_destination_deactivated", reason
+            )
+            return self._destination_metadata(session, account)
+
+    def _locked_destination(self, session: Session, account_id: UUID) -> Account:
+        account = self._locked_account(session, account_id)
+        if account.webhook_url is None or account.webhook_disabled_at is not None:
+            raise WebhookDestinationNotFound("Destino ativo não encontrado.")
+        return account
+
+    @staticmethod
+    def _audit_lifecycle(
+        session: Session, account_id: UUID, action: str, reason: str | None
+    ) -> None:
+        session.flush()
+        session.add(
+            AdministrativeAudit(
+                actor="operational_credential",
+                account_id=account_id,
+                action=action,
+                object_type="webhook_destination",
+                object_id=str(account_id),
+                reason=reason,
+            )
+        )
+        session.flush()
+
+    def _rotate(self, session: Session, account: Account, *, immediate: bool) -> str:
+        account_id = account.id
         secret = generate_webhook_secret()
         cipher = self._require_cipher()
         now = _utc_now()
-        with self._sessions.begin() as session:
-            account = session.execute(
-                select(Account).where(Account.id == account_id).with_for_update()
-            ).scalar_one_or_none()
-            if account is None:
-                raise WebhookConfigurationError("Conta não encontrada.")
-            current = session.execute(
-                select(WebhookSecret)
+        current = session.execute(
+            select(WebhookSecret)
+            .where(
+                WebhookSecret.account_id == account_id,
+                WebhookSecret.is_current.is_(True),
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if current is None:
+            raise WebhookConfigurationError(
+                "A conta não tem material de webhook ativo."
+            )
+        current.is_current = False
+        current.expires_at = now if immediate else now + WEBHOOK_SECRET_OVERLAP
+        if immediate:
+            session.execute(
+                update(WebhookSecret)
                 .where(
                     WebhookSecret.account_id == account_id,
-                    WebhookSecret.is_current.is_(True),
+                    WebhookSecret.is_current.is_(False),
                 )
-                .with_for_update()
-            ).scalar_one_or_none()
-            if current is None:
-                raise WebhookConfigurationError(
-                    "A conta não tem material de webhook ativo."
-                )
-            current.is_current = False
-            current.expires_at = now if immediate else now + WEBHOOK_SECRET_OVERLAP
-            if immediate:
-                session.execute(
-                    update(WebhookSecret)
-                    .where(
-                        WebhookSecret.account_id == account_id,
-                        WebhookSecret.is_current.is_(False),
-                    )
-                    .values(expires_at=now)
-                )
-            session.add(
-                WebhookSecret(
-                    account_id=account_id,
-                    secret_ciphertext=cipher.encrypt(account_id, secret),
-                    is_current=True,
-                )
+                .values(expires_at=now)
             )
+        session.add(
+            WebhookSecret(
+                account_id=account_id,
+                secret_ciphertext=cipher.encrypt(account_id, secret),
+                is_current=True,
+            )
+        )
         return secret
 
     def disable(self, account_id: UUID) -> None:
-        now = _utc_now()
         with self._sessions.begin() as session:
-            account = session.execute(
-                select(Account).where(Account.id == account_id).with_for_update()
-            ).scalar_one_or_none()
-            if account is None:
-                raise WebhookConfigurationError("Conta não encontrada.")
-            account.webhook_disabled_at = now
-            account.webhook_url = None
-            session.execute(
-                update(NotificationEvent)
-                .where(
-                    NotificationEvent.account_id == account_id,
-                    NotificationEvent.status == "pending",
-                )
-                .values(
-                    status="disabled",
-                    completed_at=now,
-                    next_attempt_at=None,
-                    payload=b"",
-                    last_error_code="operator_disabled",
-                    lease_owner=None,
-                    lease_expires_at=None,
-                )
+            account = self._locked_account(session, account_id)
+            self._disable(session, account)
+
+    @staticmethod
+    def _disable(session: Session, account: Account) -> None:
+        now = _utc_now()
+        account.webhook_disabled_at = now
+        account.webhook_url = None
+        session.execute(
+            update(NotificationEvent)
+            .where(
+                NotificationEvent.account_id == account.id,
+                NotificationEvent.status == "pending",
             )
-            session.execute(
-                delete(WebhookSecret).where(WebhookSecret.account_id == account_id)
+            .values(
+                status="disabled",
+                completed_at=now,
+                next_attempt_at=None,
+                payload=b"",
+                last_error_code="operator_disabled",
+                lease_owner=None,
+                lease_expires_at=None,
             )
+        )
+        session.execute(
+            delete(WebhookSecret).where(WebhookSecret.account_id == account.id)
+        )
 
     def _require_cipher(self) -> WebhookSecretCipher:
         if self._cipher is None:

@@ -231,6 +231,19 @@ _CONSOLE_PAGE = """<!doctype html>
       <p id="destination-error" role="alert" hidden></p>
       <p id="destination-status" role="status"></p>
       <pre id="destination-detail"></pre>
+      <fieldset id="destination-lifecycle-fields" disabled>
+        <legend>Material e desativação</legend>
+        <button id="destination-rotate-planned" type="button">Rotacionar material com sobreposição de 72 horas</button>
+        <button id="destination-rotate-immediate" type="button">Rotacionar material imediatamente</button>
+        <button id="destination-deactivate" type="button">Desativar destino</button>
+        <form id="destination-reason-form" hidden>
+          <p id="destination-confirmation"></p>
+          <label for="destination-reason">Motivo</label>
+          <input id="destination-reason" name="reason" required autocomplete="off">
+          <button type="submit">Confirmar</button>
+          <button id="destination-cancel" type="button">Cancelar</button>
+        </form>
+      </fieldset>
       <div id="destination-secret" hidden>
         <p>Copie o material de verificação agora. Esta é a única exibição.</p>
         <label for="destination-material">Material de verificação</label>
@@ -555,6 +568,10 @@ _CONSOLE_PAGE = """<!doctype html>
     const destinationError = document.getElementById("destination-error");
     const destinationStatus = document.getElementById("destination-status");
     const destinationDetail = document.getElementById("destination-detail");
+    const destinationLifecycleFields = document.getElementById("destination-lifecycle-fields");
+    const destinationReasonForm = document.getElementById("destination-reason-form");
+    let destinationActive = false;
+    let destinationAction = null;
     let destinationView = 0;
     let destinationMutationPending = false;
     let destinationLoading = false;
@@ -568,6 +585,10 @@ _CONSOLE_PAGE = """<!doctype html>
 
     function resetDestination() {
       clearDestinationSecret();
+      cancelDestinationAction();
+      destinationActive = false;
+      destinationLoading = false;
+      destinationLifecycleFields.disabled = true;
       destinationForm.reset();
       destinationFields.disabled = true;
       destinationError.hidden = true;
@@ -583,16 +604,18 @@ _CONSOLE_PAGE = """<!doctype html>
 
     function updateDestinationActions() {
       destinationFields.disabled = !selectedAccountId || destinationMutationPending || destinationLoading;
+      destinationLifecycleFields.disabled = destinationFields.disabled || !destinationActive;
     }
 
     function showDestination(metadata) {
+      destinationActive = metadata.active;
       destinationForm.elements.url.value = metadata.url || "";
       destinationDetail.textContent = JSON.stringify(metadata, null, 2);
       destinationStatus.textContent = metadata.active ? "Destino ativo." : "Destino inativo.";
     }
 
-    async function destinationRequest(accountId, options) {
-      const response = await fetch(`/v1/accounts/${accountId}/webhook-destination`, {
+    async function destinationRequest(accountId, options, action = "") {
+      const response = await fetch(`/v1/accounts/${accountId}/webhook-destination${action}`, {
         cache: "no-store", ...options,
       });
       if (response.status === 401) {
@@ -603,6 +626,7 @@ _CONSOLE_PAGE = """<!doctype html>
       if (!response.ok) {
         const problem = await response.json();
         if (problem.code === "DESTINATION_NOT_FOUND" && !options) return null;
+        if (problem.code === "REASON_REQUIRED") throw new Error("Informe o motivo antes de confirmar.");
         if (problem.code === "DESTINATION_REJECTED") {
           throw new Error("Endereço recusado. O destino anterior permanece. Verifique o endereço e os destinos permitidos.");
         }
@@ -613,6 +637,7 @@ _CONSOLE_PAGE = """<!doctype html>
 
     async function loadDestination() {
       clearDestinationSecret();
+      cancelDestinationAction();
       const view = destinationView;
       const accountId = selectedAccountId;
       if (!accountId) return;
@@ -624,6 +649,7 @@ _CONSOLE_PAGE = """<!doctype html>
         if (view !== destinationView || accountId !== selectedAccountId) return;
         if (destination) showDestination(destination);
         else {
+          destinationActive = false;
           destinationForm.reset();
           destinationDetail.textContent = "";
           destinationStatus.textContent = "Nenhum destino configurado. A API Key continua válida sem avisos de webhook.";
@@ -640,6 +666,7 @@ _CONSOLE_PAGE = """<!doctype html>
       event.preventDefault();
       if (destinationMutationPending || destinationLoading || !selectedAccountId) return;
       clearDestinationSecret();
+      cancelDestinationAction();
       const view = destinationView;
       const accountId = selectedAccountId;
       destinationError.hidden = true;
@@ -664,6 +691,69 @@ _CONSOLE_PAGE = """<!doctype html>
         destinationMutationPending = false;
         updateDestinationActions();
       }
+    });
+    function cancelDestinationAction() {
+      destinationAction = null;
+      destinationReasonForm.reset();
+      destinationReasonForm.hidden = true;
+    }
+
+    function requestDestinationReason(action) {
+      if (destinationLifecycleFields.disabled) return;
+      clearDestinationSecret();
+      cancelDestinationAction();
+      destinationAction = action;
+      document.getElementById("destination-confirmation").textContent = action === "immediate"
+        ? "O material anterior deixará de valer imediatamente. Informe o motivo antes de confirmar."
+        : "Novas entregas e pendências serão interrompidas, e os materiais deixarão de valer. Informe o motivo antes de confirmar.";
+      destinationReasonForm.hidden = false;
+      destinationReasonForm.elements.reason.focus();
+    }
+
+    async function mutateDestination(action, reason) {
+      if (destinationLifecycleFields.disabled || !selectedAccountId) return;
+      clearDestinationSecret();
+      cancelDestinationAction();
+      const view = destinationView;
+      const accountId = selectedAccountId;
+      destinationError.hidden = true;
+      destinationMutationPending = true;
+      updateDestinationActions();
+      try {
+        const operation = action === "deactivate" ? "/deactivate" : "/rotate";
+        const payload = action === "deactivate" ? { reason } : { mode: action, ...(reason ? { reason } : {}) };
+        const result = await destinationRequest(accountId, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }, operation);
+        if (view !== destinationView || accountId !== selectedAccountId) return;
+        const { verificationMaterial, ...metadata } = result;
+        showDestination(metadata);
+        if (verificationMaterial) {
+          document.getElementById("destination-material").value = verificationMaterial;
+          document.getElementById("destination-secret").hidden = false;
+        }
+      } catch (error) {
+        if (view === destinationView) showDestinationError(error.message);
+      } finally {
+        destinationMutationPending = false;
+        updateDestinationActions();
+      }
+    }
+
+    document.getElementById("destination-rotate-planned").addEventListener("click", () => mutateDestination("planned"));
+    document.getElementById("destination-rotate-immediate").addEventListener("click", () => requestDestinationReason("immediate"));
+    document.getElementById("destination-deactivate").addEventListener("click", () => requestDestinationReason("deactivate"));
+    document.getElementById("destination-cancel").addEventListener("click", cancelDestinationAction);
+    destinationReasonForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const reason = destinationReasonForm.elements.reason.value.trim();
+      if (!reason) {
+        showDestinationError("Informe o motivo antes de confirmar.");
+        return;
+      }
+      if (destinationAction) mutateDestination(destinationAction, reason);
     });
     document.getElementById("destination-refresh").addEventListener("click", () => {
       loadDestination().catch((error) => showDestinationError(error.message));
