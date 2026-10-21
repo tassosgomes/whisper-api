@@ -1,11 +1,14 @@
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using Whisper.Recorder.Core.Access;
 using Whisper.Recorder.Core.Diagnostics;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Recording;
+using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Audio;
 using Whisper.Recorder.Host.Shell;
+using Whisper.Recorder.Presentation.Access;
 using Whisper.Recorder.Presentation.Recording;
 using Wpf.Ui.Appearance;
 
@@ -20,6 +23,8 @@ public partial class App : Application
     private RecordingSession? session;
     private RecordingViewModel? recordingViewModel;
     private RecordingScreenViewModel? screen;
+    private ApiAccessProbe? accessProbe;
+    private ApiAccessViewModel? accessViewModel;
     private RecordingIndicatorCoordinator? coordinator;
     private TrayIndicator? tray;
     private MainWindow? window;
@@ -80,7 +85,15 @@ public partial class App : Application
         recordingViewModel = new RecordingViewModel(session, repository);
         screen = new RecordingScreenViewModel(recordingViewModel, capture);
 
-        window = new MainWindow(screen, CleanupAsync);
+        // Configuração do acesso à API: opcional para gravar, pedida só no primeiro envio.
+        accessProbe = new ApiAccessProbe();
+        accessViewModel = new ApiAccessViewModel(new ApiAccessService(
+            new WindowsCredentialVault(), new ApiConfigurationStore(ApiConfigurationStore.DefaultPath), accessProbe, diagnostic));
+
+        window = new MainWindow(screen, accessViewModel, CleanupAsync);
+        // Ponto de entrada do envio (10.0): chamar accessViewModel.RequestSendAsync() antes de enviar;
+        // sem acesso confirmado, esta assinatura abre as configurações.
+        accessViewModel.ConfigurationRequested += () => window.ShowSettings();
         SessionEnding += OnSessionEnding;
         window.Show();
 
@@ -130,6 +143,8 @@ public partial class App : Application
             if (screen is not null)
                 await screen.DisposeAsync().ConfigureAwait(false);
             recordingViewModel?.Dispose();
+            accessViewModel?.Dispose();
+            accessProbe?.Dispose();
             if (session is not null)
                 await session.DisposeAsync().ConfigureAwait(false);
             if (capture is not null)

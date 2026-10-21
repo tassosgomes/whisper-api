@@ -442,3 +442,28 @@ dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "
 V-09 usa arquivos temporários, dublê do cofre e interceptação HTTP. Cobre
 confirmações, títulos, remoção completa e seletiva, falha do cofre e limpeza
 enquanto uma consulta de job aguarda resposta, sem recriar dados depois.
+
+## Configuração do acesso à API no host (V-05, Windows)
+
+`src/Host/Access/WindowsCredentialVault.cs` implementa `ICredentialVault` sobre o Windows
+Credential Manager (`CredWrite`/`CredRead`/`CredDelete` de `advapi32`, credencial genérica).
+O alvo do app é `Whisper.Recorder/ApiKey`; os testes usam alvos `Whisper.Recorder.Test/...`
+com GUID, removidos ao fim de cada teste. A persistência é `LOCAL_MACHINE`: sobrevive ao
+reinício e ao logoff, é restrita ao usuário atual e não é replicada para outros computadores
+(`ENTERPRISE` serviria apenas a perfis de domínio com roaming). O valor é gravado em UTF-8 e os
+buffers intermediários são zerados; falhas só informam o código do Windows, nunca a chave.
+
+A tela é `ApiAccessWindow` (WPF-UI), aberta pelo botão "Configurações" da janela principal.
+Ela só coleta o endereço e a API Key (campo de senha, sem binding) e delega ao `ApiAccessViewModel`.
+O campo de senha é limpo antes da primeira espera. A chave transita como `string` apenas até o
+núcleo entregá-la ao cofre e ao probe; o `string` é imutável e fica sob o coletor de lixo, então
+não há como zerá-lo. A janela mostra a chave mascarada (últimos 4 caracteres), a mensagem de
+validação em linguagem simples, e os comandos de substituir (salvar uma nova) e remover.
+
+O app grava sem configuração. Ponto de entrada para o envio (10.0): chamar
+`ApiAccessViewModel.RequestSendAsync()` antes de enviar. Sem acesso confirmado ele dispara
+`ConfigurationRequested`, que `App.Compose` liga a `MainWindow.ShowSettings()`.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V05*" --minimum-expected-tests 4
+```

@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Interop;
+using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Shell;
+using Whisper.Recorder.Presentation.Access;
 using Whisper.Recorder.Presentation.Recording;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
@@ -11,14 +13,17 @@ namespace Whisper.Recorder.Host;
 public partial class MainWindow : FluentWindow
 {
     private readonly RecordingScreenViewModel screen;
+    private readonly ApiAccessViewModel access;
+    private ApiAccessWindow? settings;
     private readonly ShutdownGuard guard;
     private GlobalHotkey? hotkey;
     private readonly Func<Task> cleanup;
     private bool allowClose;
 
-    public MainWindow(RecordingScreenViewModel screen, Func<Task> cleanup)
+    public MainWindow(RecordingScreenViewModel screen, ApiAccessViewModel access, Func<Task> cleanup)
     {
         this.screen = screen;
+        this.access = access;
         this.cleanup = cleanup;
         InitializeComponent();
         DataContext = screen;
@@ -53,6 +58,20 @@ public partial class MainWindow : FluentWindow
             handled = true;
         return 0;
     }
+
+    /// <summary>Abre as configurações do acesso à API (uma única janela); também é o destino do primeiro envio.</summary>
+    public void ShowSettings()
+    {
+        if (settings is null)
+        {
+            settings = new ApiAccessWindow(access) { Owner = this };
+            settings.Closed += (_, _) => settings = null;
+        }
+        settings.Show();
+        settings.Activate();
+    }
+
+    private void OnOpenSettings(object sender, RoutedEventArgs e) => ShowSettings();
 
     public void ShowAndActivate()
     {
