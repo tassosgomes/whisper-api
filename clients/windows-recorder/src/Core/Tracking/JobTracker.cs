@@ -6,6 +6,7 @@ using Whisper.Recorder.Core.Access;
 using Whisper.Recorder.Core.Api.Generated.Models;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Recording;
+using Whisper.Recorder.Core.Storage;
 using Whisper.Recorder.Core.Uploading;
 
 namespace Whisper.Recorder.Core.Tracking;
@@ -188,7 +189,7 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
             file.Write(bytes);
             file.Flush(true);
         }
-        File.Move(temporary, path, overwrite: true);
+        AtomicFile.Replace(temporary, path);
     }
 
     private void Save(RecordingMetadata recording)
