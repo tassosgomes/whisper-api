@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 task_kind: vertical
 blocked_by: [4.0]
 gate: "dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V05*" --minimum-expected-tests 8"
@@ -42,8 +42,8 @@ A validação usa `getTranscription` com identificador inexistente (TechSpec, De
 
 ## Pronto quando
 
-- [ ] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V05*" --minimum-expected-tests 8`
-- [ ] Chave válida, revogada, de conta desativada e API fora do ar produzem os quatro resultados distintos, e a API fora do ar não é tratada como chave inválida.
-- [ ] Após salvar, o arquivo de configuração e o diário do teste não contêm a chave; a ViewModel mostra só os últimos caracteres.
-- [ ] Substituir e remover a chave refletem no estado de acesso e no dublê do cofre.
-- [ ] O adaptador de rede real é exercitado contra a API real do repositório, não só com dublê.
+- [x] Gate focalizado passa (exit 0): `dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V05*" --minimum-expected-tests 8`
+- [x] Chave válida, revogada, de conta desativada e API fora do ar produzem os quatro resultados distintos, e a API fora do ar não é tratada como chave inválida.
+- [x] Após salvar, o arquivo de configuração e o diário do teste não contêm a chave; a ViewModel mostra só os últimos caracteres.
+- [x] Substituir e remover a chave refletem no estado de acesso e no dublê do cofre.
+- [x] O adaptador de rede real é exercitado contra a API real do repositório, não só com dublê.

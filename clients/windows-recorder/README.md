@@ -29,6 +29,13 @@ dotnet format clients/windows-recorder --verify-no-changes
 dotnet test --project clients/windows-recorder/tests/Core.Tests --minimum-expected-tests 1
 ```
 
+Os testes V-05 também precisam do ambiente Python 3.12 de desenvolvimento do
+repositório, com as dependências de `.[dev]` instaladas em `.venv`. Para usar
+outro ambiente, defina `WHISPER_TEST_PYTHON` com o caminho do interpretador.
+Essa preparação também é necessária no CI que execute a suíte completa.
+Os testes iniciam a API real em um processo filho e usam HTTP em loopback;
+não pule esses testes quando o ambiente Python estiver ausente.
+
 O build da solução inclui os cinco projetos, inclusive o XAML do host e o projeto
 de testes Windows, com `EnableWindowsTargeting=true`. Foi verificado no Linux
 com SDK 10.0.400: 0 erros, 0 warnings. Não houve necessidade de excluir o host
@@ -112,6 +119,53 @@ agendador que aguarda pulsos explícitos. O teste de recuperação inicia outro
 processo .NET, aguarda um checkpoint, encerra-o à força e reabre os arquivos.
 Não usa rede, MinIO nem dispositivos reais.
 
+## Acesso à API (V-05)
+
+`ApiAccessService` recebe `ICredentialVault`, `ApiConfigurationStore`,
+`ApiAccessProbe` e, opcionalmente, `DiagnosticLog`. O host cria uma instância
+compartilhada do serviço e mantém o probe vivo até encerrar o app. O caminho
+padrão da configuração é `ApiConfigurationStore.DefaultPath`. A configuração
+comum contém apenas `apiBaseAddress`; a chave pertence à porta do cofre.
+
+`ApiAccessViewModel.InitializeAsync` carrega e verifica o acesso salvo.
+`SaveAsync(endereço, chave)` valida uma candidata e só então salva ou substitui
+a chave. A ViewModel não guarda uma propriedade com a chave completa: o host
+passa o valor do controle de senha e limpa esse controle após o uso.
+`MaskedKey` mostra apenas o sufixo de quatro caracteres; chaves curtas são
+inteiramente mascaradas. `RemoveAsync` remove a chave do cofre, preserva o
+endereço e volta ao estado ausente. Uma falha de persistência produz mensagem
+fixa; se a escrita atômica do endereço falhar, o serviço restaura a chave anterior.
+
+O endereço aceita HTTP/HTTPS, inclusive implantação sob um prefixo, com `/v1`
+opcional. Usuário/senha na URL, consulta, fragmento e endereço que contenha a
+chave informada são recusados. O probe usa `getTranscription` do cliente gerado
+com um UUID novo: `404` confirma, `401` recusa e os demais resultados deixam
+o acesso não verificável. O timeout padrão é 10 s. Redirecionamentos não são
+seguidos; o corpo da resposta e mensagens de exceção não chegam à apresentação
+nem ao diário. Cancelamento pedido pelo chamador continua sendo cancelamento.
+
+Antes de iniciar o envio, o coordenador pode chamar
+`ApiAccessViewModel.RequestSendAsync`: ele verifica novamente a chave salva,
+devolve se o envio pode continuar e dispara `ConfigurationRequested` quando
+o acesso está ausente ou recusado. `CanSend` reflete o último resultado;
+a gravação local permanece independente das configurações da API.
+As notificações da ViewModel respeitam o `SynchronizationContext` de criação.
+O cofre Windows e a tela são entregues na task 8.0; o upload, na 9.0.
+
+```bash
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V05*" --minimum-expected-tests 8
+```
+
+Os testes usam a aplicação FastAPI real do repositório, com middleware,
+autenticação, resposta Problem Details, `CredentialStore` e `JobManager` reais,
+em um processo Python com SQLite temporário. Substituem apenas o ciclo de
+startup de serviços externos; não precisam de PostgreSQL, MinIO ou modelo.
+As consultas cruzam o HTTP real em loopback. Falhas de rede, timeout e respostas
+imprevistas usam a fronteira HTTP controlada. Credenciais de teste transitam
+por pipes privados e cabeçalhos, sem arquivos ou logs de conteúdo.
+O modelo atual da API não tem operação de desativação de conta; o cenário de
+conta sem acesso revoga suas credenciais pelo ciclo real da API e verifica `401`.
+
 ## Regenerar o cliente da API
 
 Kiota está fixado em `dotnet-tools.json`. O runtime usa `Microsoft.Kiota.Bundle`,
@@ -139,9 +193,9 @@ aprovado é alterada. Kiota avisa que `uri` e `uri-reference` viram `string`;
 isso é esperado e preserva URLs absolutas e caminhos relativos do contrato.
 
 Após regenerar, compile e revise o diff. O CI regenera e exige ausência de diff
-nos arquivos gerados. O endereço base gerado é `/v1`; a fatia de configurações
-deverá fornecer o endereço absoluto da implantação no adaptador, assim como a
-autenticação. O smoke não envia requisições.
+nos arquivos gerados. O endereço base gerado é `/v1`; `ApiAccessProbe` fornece
+o endereço absoluto da implantação no adaptador e a chave no cabeçalho da
+consulta de validação. O smoke da estrutura não envia requisições.
 
 ## Diagnóstico e dependências
 
