@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"
+     viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Whisper Recorder</title>
+  <desc id="desc">Microfone branco e ponto de gravação coral sobre base azul arredondada.</desc>
+  <rect x="12" y="12" width="232" height="232"
+        rx="52" fill="#2463D4"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="16" stroke-linecap="round">
+    <path d="M 120 184 V 200 M 96 200 H 144"/>
+    <path d="M 72 120 V 136
+             A 48 48 0 0 0 168 136
+             V 120"/>
+  </g>
+  <rect x="96" y="48" width="48" height="88"
+        rx="24" fill="#FFFFFF"/>
+  <circle cx="184" cy="72" r="18" fill="#FF8A80"/>
+</svg>
