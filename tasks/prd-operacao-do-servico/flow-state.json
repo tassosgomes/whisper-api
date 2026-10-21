@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "branch": "feature/operacao-do-servico",
+  "original_base_ref": "b5201bb428532539c69efc889cb9d76460bb20b9",
+  "base_ref": "2dfdb94d0660c9e263d510ce11ce642b11a47458",
+  "target_ref": "2dfdb94d0660c9e263d510ce11ce642b11a47458",
+  "last_checkpoint": "62480e895f80f005d56ba16ffae8b8c1c68dc21a",
+  "phase": "complete",
+  "active_task": null,
+  "attempt": 1,
+  "max_attempts": 3,
+  "full_attempt": 1,
+  "transport_retries": 0,
+  "transport": "herdr",
+  "specs": [
+    "techspec.md"
+  ],
+  "delivery": "pr",
+  "validated_commit": "62480e895f80f005d56ba16ffae8b8c1c68dc21a",
+  "validated_tree": "57a0e6ab575f04a753565618dfd82eb58e986d64",
+  "pending_delegation": {
+    "role": "integrator",
+    "mode": "complete-prd",
+    "delivery": "pr"
+  },
+  "last_result": {
+    "run_id": "run.DAJBFEBn",
+    "role": "validator",
+    "mode": "full",
+    "outcome": "approved",
+    "report": "prd_review.md"
+  },
+  "history": [
+    {
+      "ts": "2026-10-21",
+      "event": "plan_approved",
+      "note": "Plano de 8 tasks aprovado pelo usuário; transporte herdr; entrega pr"
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "transport_failure",
+      "run_id": "run.U22ObRJq",
+      "note": "opencode rejeita --model; roteamento local em .tsg-flow/routing.json sem opencode"
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "branch_ready",
+      "run_id": "run.04943UOz",
+      "branch": "feature/operacao-do-servico"
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "1.0",
+      "commit": "bd3f1e7a6a2066569e1ea9010b5c445da020f8f0",
+      "runs": [
+        "run.H39FbkmI",
+        "run.sbImoJ27",
+        "run.pLHkdHOw"
+      ]
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "2.0",
+      "commit": "51421f9d4335cdce89b1eee60f1e853a8c04b8a2",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "3.0",
+      "commit": "1e383a445d8165830a2a8b89c9615fd3f83626bb",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "4.0",
+      "commit": "5f87ec8f97377bcdd0277fe3f32f2caaba1abcec",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "5.0",
+      "commit": "40307070e2538d0b6863fd5c4d68be714ae02f2f",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "6.0",
+      "commit": "dce5dcaa23a7311b7646e154c133f8c89a45ef29",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "7.0",
+      "commit": "cad2251d7e04d8952d43868dc28edd69ff034f18",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "checkpoint",
+      "task": "8.0",
+      "commit": "e03768646b087dcffce733ed55429109e5ae0ff3",
+      "attempts": 1
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "integration_ready",
+      "run_id": "run.mW7v4G9o",
+      "note": "rebase sobre main 2dfdb94 (PR #4)"
+    },
+    {
+      "ts": "2026-10-21",
+      "event": "full_approved",
+      "run_id": "run.DAJBFEBn",
+      "commit": "62480e895f80f005d56ba16ffae8b8c1c68dc21a"
+    }
+  ]
+}
