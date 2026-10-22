@@ -15,7 +15,7 @@ namespace Whisper.Recorder.Host.Shell;
 public static class RecorderIcons
 {
     /// <summary>URI do recurso do ícone do app, para XAML e código. O componente é o assembly do host.</summary>
-    public const string AppIconUri = "pack://application:,,,/Host;component/Assets/icon.ico";
+    public const string AppIconUri = "pack://application:,,,/WhisperRecorder;component/Assets/icon.ico";
 
     /// <summary>Indicador isolado, para o overlay da barra de tarefas.</summary>
     public static ImageSource Render(RecordingIndicatorKind kind, int size)

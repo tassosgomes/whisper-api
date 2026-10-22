@@ -12,6 +12,7 @@ using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Audio;
 using Whisper.Recorder.Host.Management;
 using Whisper.Recorder.Host.Playback;
+using Whisper.Recorder.Host.Setup;
 using Whisper.Recorder.Host.Shell;
 using Whisper.Recorder.Host.Transcripts;
 using Whisper.Recorder.Presentation.Access;
@@ -51,7 +52,16 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        singleInstance = new Mutex(true, "Whisper.Recorder.Host", out var created);
+        if (e.Args.Contains(UninstallDataPurge.Argument))
+        {
+            // Modo do desinstalador: sem janela, bandeja nem diário, e sem criar a pasta de dados.
+            var exitCode = UninstallDataPurge.ForProduction().Run();
+            Environment.ExitCode = exitCode;
+            Shutdown(exitCode);
+            return;
+        }
+
+        singleInstance = new Mutex(true, UninstallDataPurge.AppMutexName, out var created);
         if (!created)
         {
             // Duas instâncias disputariam o atalho global e a pasta de gravações.

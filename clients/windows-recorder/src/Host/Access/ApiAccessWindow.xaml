@@ -3,7 +3,7 @@
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  Title="Configurações" Width="560" Height="680" MinWidth="460" MinHeight="460"
-                 Icon="pack://application:,,,/Host;component/Assets/icon.ico"
+                 Icon="pack://application:,,,/WhisperRecorder;component/Assets/icon.ico"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="Mica"
                  WindowStartupLocation="CenterOwner">
@@ -14,7 +14,7 @@
         </Grid.RowDefinitions>
         <ui:TitleBar Grid.Row="0" Title="Configurações: acesso à API" ShowMaximize="False" ShowMinimize="False">
             <ui:TitleBar.Icon>
-                <ui:ImageIcon Source="pack://application:,,,/Host;component/Assets/icon.ico" />
+                <ui:ImageIcon Source="pack://application:,,,/WhisperRecorder;component/Assets/icon.ico" />
             </ui:TitleBar.Icon>
         </ui:TitleBar>
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">

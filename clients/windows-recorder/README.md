@@ -616,3 +616,42 @@ do painel (ou em "apagar tudo"); apagar a gravação selecionada não interrompe
 `WaveOutEvent` (callback por evento, sem janela), criável e descartável em qualquer thread, e o descarte roda fora da
 interface (`ReleaseAsync`). O núcleo remove junções e links simbólicos dentro dos dados do app **como links**, sem seguir
 para o destino (`Directory.Delete` recursivo do .NET falha com acesso negado em link aninhado); o teste usa `mklink /J`.
+
+## Instalador do Windows (V-10, task 17.0)
+
+Pacote feito com o Inno Setup 6, instalado **por usuário, sem direitos de administrador**, só para Windows 11 x64. O
+`dotnet publish` é self-contained (.NET embutido, sem trimming porque o WPF não o suporta): um Windows 11 limpo não precisa
+instalar driver, cabo virtual nem runtime.
+
+**Gerar o pacote.** Pré-requisito: Inno Setup 6 (`winget install JRSoftware.InnoSetup --scope user`).
+
+```powershell
+powershell -File clients/windows-recorder/installer/build-installer.ps1 -Version 1.0.0
+```
+
+O script publica o Host em `clients/windows-recorder/artifacts/publish/win-x64`, procura o `ISCC.exe` (`-IsccPath`, PATH,
+`%LOCALAPPDATA%\Programs\Inno Setup 6`, `Program Files (x86)`), compila `installer/WhisperRecorder.iss` e imprime o caminho
+`artifacts/installer/WhisperRecorder-Setup-<versão>.exe` (pasta ignorada pelo git).
+
+**Instalação.** Em `%LOCALAPPDATA%\Programs\Whisper Recorder` (`{autopf}` vira a pasta de programas do usuário com
+`PrivilegesRequired=lowest`), atalho no menu Iniciar, atalho opcional na área de trabalho e opção de abrir o app ao final.
+Instalar sobre uma versão anterior atualiza no lugar (`AppId` fixo). Com o app aberto o instalador pede para fechá-lo
+(`AppMutex` = o mutex da instância única, `UninstallDataPurge.AppMutexName`). O pacote nunca inclui dados do usuário.
+
+**Desinstalação.** Pergunta "Manter as gravações e transcrições neste PC?" (padrão: Sim).
+- **Sim:** remove só o programa; gravações, transcrições, configurações e diário continuam em
+  `%LOCALAPPDATA%\Whisper\Recorder` e a chave no Credential Manager, e voltam a aparecer ao reinstalar.
+- **Não:** o desinstalador roda `WhisperRecorder.exe --purge-data` (modo sem janela, `UninstallDataPurge`): recusa se o app estiver
+  aberto (código 2), recupera gravações interrompidas, reaproveita o "apagar tudo" da 16.0 (chave primeiro, junções sem
+  seguir o destino) e remove a pasta de dados e a pasta `Whisper` vazias. Se falhar (código diferente de 0), o
+  desinstalador avisa onde estão os dados para apagar à mão.
+- **Silenciosa** (`/SILENT`, `/VERYSILENT`): sempre mantém os dados e nunca apaga.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V10*" --minimum-expected-tests 3
+```
+
+Os testes V10 usam pasta temporária, alvo de teste do Credential Manager (`Whisper.Recorder.Test/Installer/...`), um mutex
+de teste e conferem o contrato do `.iss` (sem elevação, Windows 11, mesmo mutex e argumento do app, guarda de
+desinstalação silenciosa). A instalação e a desinstalação de verdade só são exercitadas na validação manual (Windows 11
+limpo). O `.iss` é UTF-8 com BOM (necessário para os acentos no Inno Setup).

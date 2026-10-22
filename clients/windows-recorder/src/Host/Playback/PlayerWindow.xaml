@@ -3,7 +3,7 @@
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  Title="Reproduzir" Width="620" Height="320" MinWidth="460" MinHeight="300"
-                 Icon="pack://application:,,,/Host;component/Assets/icon.ico"
+                 Icon="pack://application:,,,/WhisperRecorder;component/Assets/icon.ico"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="Mica"
                  WindowStartupLocation="CenterOwner">
@@ -17,7 +17,7 @@
         </Grid.RowDefinitions>
         <ui:TitleBar Grid.Row="0" Title="Whisper: reprodução" ShowMinimize="False" ShowMaximize="False">
             <ui:TitleBar.Icon>
-                <ui:ImageIcon Source="pack://application:,,,/Host;component/Assets/icon.ico" />
+                <ui:ImageIcon Source="pack://application:,,,/WhisperRecorder;component/Assets/icon.ico" />
             </ui:TitleBar.Icon>
         </ui:TitleBar>
         <StackPanel Grid.Row="1" Margin="24,8,24,24">

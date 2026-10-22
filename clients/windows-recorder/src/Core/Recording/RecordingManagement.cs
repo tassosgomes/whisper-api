@@ -76,7 +76,8 @@ public sealed class RecordingManagement
         await recordings.Operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (recordings.List().Any(recording => recording.State == RecordingState.Recording))
+            // A corrupt metadata.json must not block the reset: it is deleted with everything else.
+            if (recordings.ListReadable().Any(recording => recording.State == RecordingState.Recording))
                 return ManagementOutcome.RecordingInProgress;
             cancellationToken.ThrowIfCancellationRequested();
             // Once deletion starts, finish it even if the caller closes the dialog.

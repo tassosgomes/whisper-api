@@ -4,7 +4,7 @@
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  xmlns:host="clr-namespace:Whisper.Recorder.Host"
                  Title="Whisper" Width="960" Height="720" MinWidth="720" MinHeight="560"
-                 Icon="pack://application:,,,/Host;component/Assets/icon.ico"
+                 Icon="pack://application:,,,/WhisperRecorder;component/Assets/icon.ico"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="Mica"
                  WindowStartupLocation="CenterScreen">
@@ -27,7 +27,7 @@
         </Grid.RowDefinitions>
         <ui:TitleBar Grid.Row="0" Title="Whisper: gravador de reuniões">
             <ui:TitleBar.Icon>
-                <ui:ImageIcon Source="pack://application:,,,/Host;component/Assets/icon.ico" />
+                <ui:ImageIcon Source="pack://application:,,,/WhisperRecorder;component/Assets/icon.ico" />
             </ui:TitleBar.Icon>
         </ui:TitleBar>
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">

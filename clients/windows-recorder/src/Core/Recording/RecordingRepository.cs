@@ -55,10 +55,11 @@ public sealed class RecordingRepository
         AtomicFile.Replace(temporary, MetadataPath(metadata.Id));
     }
 
-    /// <summary>Call once on application startup, before creating a recording session.</summary>
+    /// <summary>Call once on application startup, before creating a recording session. A corrupt metadata.json is skipped: it
+    /// must not keep the other recordings stuck in "recording" (nor block "delete all" from the uninstaller).</summary>
     public IReadOnlyList<RecordingMetadata> RecoverInterrupted()
     {
-        foreach (var metadata in List().Where(m => m.State == RecordingState.Recording))
+        foreach (var metadata in ListReadable().Where(m => m.State == RecordingState.Recording))
         {
             ReleaseReserve(metadata.Id);
             if (File.Exists(AudioPath(metadata.Id)))
@@ -69,7 +70,7 @@ public sealed class RecordingRepository
             else
                 Save(metadata with { State = RecordingState.Interrupted, Duration = TimeSpan.Zero });
         }
-        return List();
+        return ListReadable();
     }
 
     public IReadOnlyList<RecordingMetadata> List() => !Directory.Exists(RootDirectory) ? [] : Directory.EnumerateDirectories(RootDirectory)

@@ -6,6 +6,8 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>Whisper.Recorder.Host</RootNamespace>
+    <!-- Nome do .exe instalado (Gerenciador de Tarefas, atalhos); o projeto continua "Host". -->
+    <AssemblyName>WhisperRecorder</AssemblyName>
     <ApplicationIcon>../../assets/icon/icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
