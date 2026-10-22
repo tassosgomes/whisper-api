@@ -28,6 +28,10 @@ public sealed class WindowsCredentialVault : ICredentialVault
     private const int MaxBlobBytes = 5 * 512;
     private const string UserName = "api-key";
 
+    // Chamadas simultâneas de threads do mesmo processo ao Credential Manager perdiam gravações
+    // (leitura logo depois devolvia o valor anterior ou nada); o acesso é serializado no processo.
+    private static readonly Lock Gate = new();
+
     private readonly string target;
 
     public WindowsCredentialVault(string target = ProductionTarget)
@@ -57,8 +61,11 @@ public sealed class WindowsCredentialVault : ICredentialVault
                 Persist = CredPersistLocalMachine,
                 UserName = UserName
             };
-            if (!CredWrite(ref credential, 0))
-                throw new CredentialVaultException(Marshal.GetLastPInvokeError());
+            int error;
+            lock (Gate)
+                error = CredWrite(ref credential, 0) ? 0 : Marshal.GetLastPInvokeError();
+            if (error != 0)
+                throw new CredentialVaultException(error);
         }
         finally
         {
@@ -76,9 +83,12 @@ public sealed class WindowsCredentialVault : ICredentialVault
     public ValueTask<string?> ReadAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!CredRead(target, CredTypeGeneric, 0, out var handle))
+        int error;
+        IntPtr handle;
+        lock (Gate)
+            error = CredRead(target, CredTypeGeneric, 0, out handle) ? 0 : Marshal.GetLastPInvokeError();
+        if (error != 0)
         {
-            var error = Marshal.GetLastPInvokeError();
             return error == ErrorNotFound ? ValueTask.FromResult<string?>(null) : throw new CredentialVaultException(error);
         }
         byte[]? bytes = null;
@@ -102,9 +112,11 @@ public sealed class WindowsCredentialVault : ICredentialVault
     public ValueTask RemoveAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!CredDelete(target, CredTypeGeneric, 0))
+        int error;
+        lock (Gate)
+            error = CredDelete(target, CredTypeGeneric, 0) ? 0 : Marshal.GetLastPInvokeError();
+        if (error != 0)
         {
-            var error = Marshal.GetLastPInvokeError();
             // Remover o que não existe já é o estado desejado.
             if (error != ErrorNotFound)
                 throw new CredentialVaultException(error);

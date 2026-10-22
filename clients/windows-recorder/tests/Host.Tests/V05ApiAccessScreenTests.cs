@@ -113,6 +113,7 @@ public sealed class V05ApiAccessScreenTests : IDisposable
         var requests = 0;
         session.ViewModel.ConfigurationRequested += () => requests++;
         await session.ViewModel.SaveAsync("https://api.example.test", key, Token);
+        Assert.True(session.ViewModel.Status == ApiAccessStatus.Confirmed, session.ViewModel.Message);
         Assert.True(session.ViewModel.CanSend);
 
         await session.ViewModel.RemoveAsync(Token);
@@ -154,7 +155,9 @@ public sealed class V05ApiAccessScreenTests : IDisposable
         using var session = new Session(this);
         var replacement = "wsk_nova_" + Guid.NewGuid().ToString("N");
         await session.ViewModel.SaveAsync("https://api.example.test", key, Token);
+        Assert.True(session.ViewModel.Status == ApiAccessStatus.Confirmed, session.ViewModel.Message);
         await session.ViewModel.SaveAsync("https://api.example.test", replacement, Token);
+        Assert.True(session.ViewModel.Status == ApiAccessStatus.Confirmed, session.ViewModel.Message);
 
         Assert.Equal(replacement, await new WindowsCredentialVault(target).ReadAsync(Token));
         Assert.Equal("••••" + replacement[^4..], session.ViewModel.MaskedKey);
