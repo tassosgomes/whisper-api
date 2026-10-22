@@ -9,6 +9,9 @@
 #   ./deploy.sh
 #   ./scripts/deploy.sh
 #   ./deploy.sh --force
+#   ./deploy.sh --branch feature/minha-feature
+#
+# Sem --branch, faz deploy de main.
 #
 # DEPLOY_DIR  diretório do compose de produção
 # REPO_DIR    clone deste repositório
@@ -16,10 +19,34 @@
 set -euo pipefail
 
 force=0
-if [[ "${1:-}" == "--force" ]]; then
-  force=1
-elif [[ $# -gt 0 ]]; then
-  echo "deploy: uso: deploy.sh [--force]" >&2
+branch=main
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      force=1
+      shift
+      ;;
+    -b | --branch)
+      if [[ $# -lt 2 ]]; then
+        echo "deploy: --branch precisa de um nome de branch" >&2
+        exit 2
+      fi
+      branch=$2
+      shift 2
+      ;;
+    --branch=*)
+      branch=${1#--branch=}
+      shift
+      ;;
+    *)
+      echo "deploy: uso: deploy.sh [--force] [--branch NOME]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$branch" == -* ]] || ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+  echo "deploy: nome de branch inválido: $branch" >&2
   exit 2
 fi
 
@@ -73,15 +100,23 @@ fi
 running_script=$(readlink -f "${BASH_SOURCE[0]}")
 script_hash_before=$(sha256sum "$running_script" | awk '{print $1}')
 
-echo "deploy: buscando origin/main"
-GIT_TERMINAL_PROMPT=0 git fetch --depth=100 origin main
+echo "deploy: buscando origin/$branch"
+GIT_TERMINAL_PROMPT=0 git fetch --depth=100 origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+  {
+    echo "deploy: branch $branch não encontrada em origin" >&2
+    exit 1
+  }
 
-if ! git merge-base --is-ancestor HEAD origin/main; then
-  echo "deploy: HEAD não é ancestral de origin/main; o clone precisa ser alinhado antes" >&2
-  exit 1
+if git show-ref --verify --quiet "refs/heads/$branch"; then
+  if ! git merge-base --is-ancestor "$branch" "origin/$branch"; then
+    echo "deploy: $branch local não é ancestral de origin/$branch; o clone precisa ser alinhado antes" >&2
+    exit 1
+  fi
+  git checkout --quiet "$branch"
+  git merge --ff-only "origin/$branch"
+else
+  git checkout --quiet -b "$branch" "origin/$branch"
 fi
-
-git merge --ff-only origin/main
 
 if [[ -f "$REPO_DIR/scripts/deploy.sh" ]]; then
   repo_script=$(readlink -f "$REPO_DIR/scripts/deploy.sh")
@@ -119,11 +154,11 @@ api_revision=$(revision_of whisper-api)
 worker_revision=$(revision_of whisper-worker)
 
 if [[ "$force" -eq 0 && "$api_revision" == "$sha" && "$worker_revision" == "$sha" ]]; then
-  echo "deploy: API e worker já estão em $short"
+  echo "deploy: API e worker já estão em $short ($branch)"
   exit 0
 fi
 
-echo "deploy: construindo whisper-api:$short"
+echo "deploy: construindo whisper-api:$short ($branch)"
 docker build \
   --pull \
   --label "org.opencontainers.image.revision=$sha" \
@@ -138,5 +173,5 @@ compose up -d --no-deps --force-recreate --wait --wait-timeout 600 whisper-api
 echo "deploy: recriando whisper-worker"
 compose up -d --no-deps --force-recreate --wait --wait-timeout 600 whisper-worker
 
-echo "deploy: concluído em $short"
+echo "deploy: concluído em $short ($branch)"
 compose ps whisper-api whisper-worker
