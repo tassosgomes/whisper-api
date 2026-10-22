@@ -1,4 +1,5 @@
 using Whisper.Recorder.Host.Access;
+using Whisper.Recorder.Host.Tests.Doubles;
 using Xunit;
 
 namespace Whisper.Recorder.Host.Tests;
@@ -10,6 +11,8 @@ namespace Whisper.Recorder.Host.Tests;
 public sealed class V05CredentialVaultTests : IDisposable
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    static V05CredentialVaultTests() => StaleTestCredentials.SweepOnce();
     private readonly string target = "Whisper.Recorder.Test/ApiKey/" + Guid.NewGuid().ToString("N");
 
     public void Dispose() => new WindowsCredentialVault(target).RemoveAsync().AsTask().GetAwaiter().GetResult();

@@ -4,6 +4,7 @@ using Whisper.Recorder.Core.Diagnostics;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Presentation.Access;
+using Whisper.Recorder.Host.Tests.Doubles;
 using Xunit;
 
 namespace Whisper.Recorder.Host.Tests;
@@ -15,6 +16,8 @@ namespace Whisper.Recorder.Host.Tests;
 public sealed class V05ApiAccessScreenTests : IDisposable
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    static V05ApiAccessScreenTests() => StaleTestCredentials.SweepOnce();
     private readonly string directory = Path.Combine(Path.GetTempPath(), "whisper-host-v05-" + Guid.NewGuid().ToString("N"));
     private readonly string target = "Whisper.Recorder.Test/Screen/" + Guid.NewGuid().ToString("N");
     private readonly string key = "wsk_" + Guid.NewGuid().ToString("N") + ".segredo" + Guid.NewGuid().ToString("N")[..6];

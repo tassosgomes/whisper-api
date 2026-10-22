@@ -372,6 +372,53 @@ public sealed class V06UploadTests(V06ApiFixture api) : IClassFixture<V06ApiFixt
         rig.AssertIntactAndSecretFree();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResendAfterNetworkFailureRetriesSameAttemptAndKeyWithoutNewConfirmation(bool failOnCreate)
+    {
+        await using var rig = await UploadRig.Create(api);
+        Assert.True((await rig.Send()).Succeeded);
+        rig.Update(m => m with { State = RecordingState.Transcribed });
+        var confirmation = rig.Coordinator.Prepare(rig.Id);
+        Assert.True(confirmation.HasTranscription);
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage?>> fault = (_, _) => throw new HttpRequestException("network unavailable");
+        if (failOnCreate) rig.Api.Before = fault;
+        else rig.Storage.Before = fault;
+        Assert.Equal(UploadProblem.Network,
+            (await rig.Coordinator.ConfirmAndSendAsync(confirmation, existingTranscriptionConfirmed: true, cancellationToken: Token)).Problem);
+        Assert.Equal((RecordingState.Uploading, 2), (rig.Metadata.State, rig.Metadata.UploadAttempt));
+        rig.Api.ClearFaults();
+        rig.Storage.ClearFaults();
+
+        // Mesma confirmação (ainda com "tem transcrição"): continua a tentativa 2, sem pedir confirmação de novo.
+        var result = await rig.Coordinator.ConfirmAndSendAsync(confirmation, existingTranscriptionConfirmed: true, cancellationToken: Token);
+        Assert.True(result.Succeeded);
+        Assert.Equal((RecordingState.Processing, 2), (rig.Metadata.State, rig.Metadata.UploadAttempt));
+        Assert.Equal($"recording-{rig.Id:D}-attempt-2", Assert.Single(rig.Api.IdempotencyKeys.Skip(1).Distinct()));
+        using var evidence = await rig.Evidence();
+        Assert.Equal(2, evidence.RootElement.GetProperty("jobs").GetInt32());
+        rig.AssertIntactAndSecretFree();
+    }
+
+    [Fact]
+    public async Task ResendRetryAfterFactsChangedAsksForConfirmationAgain()
+    {
+        await using var rig = await UploadRig.Create(api);
+        Assert.True((await rig.Send()).Succeeded);
+        rig.Update(m => m with { State = RecordingState.Transcribed });
+        var confirmation = rig.Coordinator.Prepare(rig.Id);
+        rig.Storage.Before = (_, _) => throw new HttpRequestException("network unavailable");
+        Assert.Equal(UploadProblem.Network,
+            (await rig.Coordinator.ConfirmAndSendAsync(confirmation, existingTranscriptionConfirmed: true, cancellationToken: Token)).Problem);
+        rig.Storage.ClearFaults();
+        rig.Update(m => m with { Title = "Outro título" });
+        var calls = rig.Api.Calls;
+        Assert.Equal(UploadProblem.ConfirmationRequired,
+            (await rig.Coordinator.ConfirmAndSendAsync(confirmation, existingTranscriptionConfirmed: true, cancellationToken: Token)).Problem);
+        Assert.Equal(calls, rig.Api.Calls);
+    }
+
     [Fact]
     public async Task ProcessingRecordingCannotStartDuplicateJob()
     {

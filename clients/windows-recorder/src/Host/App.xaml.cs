@@ -5,11 +5,13 @@ using Whisper.Recorder.Core.Access;
 using Whisper.Recorder.Core.Diagnostics;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Recording;
+using Whisper.Recorder.Core.Uploading;
 using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Audio;
 using Whisper.Recorder.Host.Shell;
 using Whisper.Recorder.Presentation.Access;
 using Whisper.Recorder.Presentation.Recording;
+using Whisper.Recorder.Presentation.Uploading;
 using Wpf.Ui.Appearance;
 
 namespace Whisper.Recorder.Host;
@@ -25,6 +27,9 @@ public partial class App : Application
     private RecordingScreenViewModel? screen;
     private ApiAccessProbe? accessProbe;
     private ApiAccessViewModel? accessViewModel;
+    private UploadTransport? uploadTransport;
+    private UploadViewModel? uploadViewModel;
+    private UploadScreenViewModel? uploadScreen;
     private RecordingIndicatorCoordinator? coordinator;
     private TrayIndicator? tray;
     private MainWindow? window;
@@ -86,14 +91,21 @@ public partial class App : Application
         screen = new RecordingScreenViewModel(recordingViewModel, capture);
 
         // Configuração do acesso à API: opcional para gravar, pedida só no primeiro envio.
+        var vault = new WindowsCredentialVault();
+        var configuration = new ApiConfigurationStore(ApiConfigurationStore.DefaultPath);
         accessProbe = new ApiAccessProbe();
-        accessViewModel = new ApiAccessViewModel(new ApiAccessService(
-            new WindowsCredentialVault(), new ApiConfigurationStore(ApiConfigurationStore.DefaultPath), accessProbe, diagnostic));
+        accessViewModel = new ApiAccessViewModel(new ApiAccessService(vault, configuration, accessProbe, diagnostic));
 
-        window = new MainWindow(screen, accessViewModel, CleanupAsync);
-        // Ponto de entrada do envio (10.0): chamar accessViewModel.RequestSendAsync() antes de enviar;
-        // sem acesso confirmado, esta assinatura abre as configurações.
+        // Envio (10.0): HttpClient real com a validação de certificado do Windows, sem redirecionamento nem retry
+        // automático. O coordenador é compartilhado com o repositório da sessão (exclusão mútua das operações).
+        uploadTransport = new UploadTransport();
+        uploadViewModel = new UploadViewModel(new UploadCoordinator(repository, configuration, vault, uploadTransport, clock, diagnostic));
+        uploadScreen = new UploadScreenViewModel(uploadViewModel, accessViewModel, screen);
+
+        window = new MainWindow(screen, accessViewModel, uploadScreen, CleanupAsync);
+        // Sem acesso confirmado no primeiro envio, ou com a chave recusada (401), abre as configurações.
         accessViewModel.ConfigurationRequested += () => window.ShowSettings();
+        uploadScreen.ConfigurationRequested += () => window.ShowSettings();
         SessionEnding += OnSessionEnding;
         window.Show();
 
@@ -142,6 +154,9 @@ public partial class App : Application
         {
             if (screen is not null)
                 await screen.DisposeAsync().ConfigureAwait(false);
+            uploadScreen?.Dispose();
+            uploadViewModel?.Dispose();
+            uploadTransport?.Dispose();
             recordingViewModel?.Dispose();
             accessViewModel?.Dispose();
             accessProbe?.Dispose();

@@ -417,6 +417,24 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
         finally { refreshing = false; }
     }
 
+    /// <summary>
+    /// Relê a lista depois de uma mudança vinda de outra thread (envio em andamento). Se a leitura
+    /// colidir com uma gravação de metadados, mantém a lista anterior em vez de esvaziá-la.
+    /// </summary>
+    public void RefreshRecordings()
+    {
+        if (disposed)
+            return;
+        if (context is not null && SynchronizationContext.Current != context)
+        {
+            context.Post(_ => RefreshRecordings(), null);
+            return;
+        }
+        try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException) { return; }
+        Raise();
+    }
+
     private void ReloadRecordings()
     {
         try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }

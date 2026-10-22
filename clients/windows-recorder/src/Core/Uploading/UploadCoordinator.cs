@@ -36,8 +36,13 @@ public sealed class UploadCoordinator(RecordingRepository recordings, ApiConfigu
         try
         {
             recording = recordings.Read(confirmation.RecordingId);
-            if (recording.State == RecordingState.Recording || Prepare(recording.Id) != confirmation
-                || (confirmation.HasTranscription && !existingTranscriptionConfirmed))
+            // Um envio em curso (Uploading) que falhou é retomado pela mesma tentativa: o "tem transcrição"
+            // da confirmação original (reenvio) não vale mais, pois o estado já mudou para Uploading.
+            var resuming = recording.State == RecordingState.Uploading && recording.UploadAttempt > 0;
+            var current = Prepare(recording.Id);
+            if (resuming) current = current with { HasTranscription = confirmation.HasTranscription };
+            if (recording.State == RecordingState.Recording || current != confirmation
+                || (confirmation.HasTranscription && !resuming && !existingTranscriptionConfirmed))
                 return new(UploadProblem.ConfirmationRequired);
             if (recording.State == RecordingState.Processing)
                 return new(UploadProblem.AlreadyProcessing);
@@ -54,7 +59,7 @@ public sealed class UploadCoordinator(RecordingRepository recordings, ApiConfigu
                 FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
             if (audio.Length != confirmation.SizeBytes) return new(UploadProblem.ConfirmationRequired);
             var checksum = Convert.ToBase64String(await SHA256.HashDataAsync(audio, cancellationToken).ConfigureAwait(false));
-            if (recording.UploadAttempt == 0 || recording.UploadRejected || confirmation.HasTranscription
+            if (recording.UploadAttempt == 0 || recording.UploadRejected || (confirmation.HasTranscription && !resuming)
                 || recording.State is RecordingState.Failed or RecordingState.ResultExpired)
                 recording = recording with
                 {

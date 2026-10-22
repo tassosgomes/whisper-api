@@ -127,7 +127,8 @@
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Gravações" Margin="0,12,0,8" />
                 <TextBlock Text="{Binding EmptyListText}" Margin="0,0,0,8"
                            Visibility="{Binding EmptyListText, Converter={StaticResource NullToVisibility}}" />
-                <ListView ItemsSource="{Binding Recordings}" MinHeight="140" MaxHeight="360"
+                <ListView x:Name="RecordingList" ItemsSource="{Binding Recordings}" MinHeight="140" MaxHeight="360"
+                          SelectionMode="Single" SelectionChanged="OnRecordingSelected"
                           AutomationProperties.Name="Lista de gravações"
                           KeyboardNavigation.TabNavigation="Once">
                     <ListView.View>
@@ -148,6 +149,65 @@
                         </GridView>
                     </ListView.View>
                 </ListView>
+
+                <!-- Envio para transcrição: nada sai sem a confirmação explícita -->
+                <StackPanel x:Name="UploadArea" Margin="0,12,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button Content="{Binding TranscribeText}" Appearance="Primary" Command="{Binding Transcribe}"
+                                   AutomationProperties.Name="Enviar a gravação selecionada para transcrição" />
+                        <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Opacity="0.8"
+                                   Text="Selecione uma gravação na lista para enviá-la." />
+                    </StackPanel>
+                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding Hint}"
+                               Visibility="{Binding Hint, Converter={StaticResource NullToVisibility}}" />
+                    <Border Padding="20" CornerRadius="8" Margin="0,12,0,0"
+                            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                            Visibility="{Binding IsVisible, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding Heading}" />
+                            <TextBlock Text="{Binding ConfirmationTitle}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding ConfirmationDuration}" />
+                            <TextBlock Text="{Binding ConfirmationSize}" />
+                            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding Notice}"
+                                       Visibility="{Binding IsConfirming, Converter={StaticResource BoolToVisibility}}" />
+                            <StackPanel Margin="0,8,0,0"
+                                        Visibility="{Binding AsksExistingConfirmation, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock TextWrapping="Wrap" Text="{Binding ExistingNotice}" />
+                                <CheckBox Content="Enviar de novo mesmo assim" Margin="0,4,0,0"
+                                          IsChecked="{Binding ExistingTranscriptionConfirmed, Mode=TwoWay}"
+                                          AutomationProperties.Name="Confirmar o reenvio de uma gravação já transcrita" />
+                            </StackPanel>
+                            <StackPanel Margin="0,12,0,0"
+                                        Visibility="{Binding ShowsProgress, Converter={StaticResource BoolToVisibility}}">
+                                <ProgressBar Height="10" Minimum="0" Maximum="1" Value="{Binding ProgressFraction, Mode=OneWay}"
+                                             IsIndeterminate="{Binding IsIndeterminate, Mode=OneWay}"
+                                             AutomationProperties.Name="Progresso do envio" />
+                                <TextBlock Margin="0,6,0,0" Text="{Binding ProgressText}" />
+                            </StackPanel>
+                            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding ResultMessage}"
+                                       Visibility="{Binding IsConfirming, Converter={StaticResource BoolToVisibility}}" />
+                            <ui:InfoBar Title="Gravação enviada" Severity="Success" IsClosable="False" Margin="0,12,0,0"
+                                        IsOpen="{Binding IsAccepted, Mode=OneWay}"
+                                        Message="{Binding ResultMessage}" />
+                            <ui:InfoBar Title="Envio não concluído" Severity="Error" IsClosable="False" Margin="0,12,0,0"
+                                        IsOpen="{Binding IsFailed, Mode=OneWay}"
+                                        Message="{Binding ResultMessage}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <ui:Button Content="Enviar para transcrição" Appearance="Primary" Command="{Binding Confirm}" Margin="0,0,8,0"
+                                           Visibility="{Binding IsConfirming, Converter={StaticResource BoolToVisibility}}"
+                                           AutomationProperties.Name="Confirmar e enviar a gravação" />
+                                <ui:Button Content="Tentar de novo" Appearance="Primary" Command="{Binding Retry}" Margin="0,0,8,0"
+                                           Visibility="{Binding IsFailed, Converter={StaticResource BoolToVisibility}}" />
+                                <ui:Button Content="Abrir configurações" Command="{Binding OpenSettings}" Margin="0,0,8,0"
+                                           Visibility="{Binding NeedsSettings, Converter={StaticResource BoolToVisibility}}" />
+                                <ui:Button Content="Cancelar" Command="{Binding Cancel}" Margin="0,0,8,0"
+                                           Visibility="{Binding CanCancel, Converter={StaticResource BoolToVisibility}}" />
+                                <ui:Button Content="Fechar" Command="{Binding Dismiss}"
+                                           Visibility="{Binding CanDismiss, Converter={StaticResource BoolToVisibility}}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
             </StackPanel>
         </ScrollViewer>
     </Grid>

@@ -5,6 +5,7 @@ using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Shell;
 using Whisper.Recorder.Presentation.Access;
 using Whisper.Recorder.Presentation.Recording;
+using Whisper.Recorder.Presentation.Uploading;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
 
@@ -14,19 +15,24 @@ public partial class MainWindow : FluentWindow
 {
     private readonly RecordingScreenViewModel screen;
     private readonly ApiAccessViewModel access;
+    private readonly UploadScreenViewModel upload;
     private ApiAccessWindow? settings;
     private readonly ShutdownGuard guard;
     private GlobalHotkey? hotkey;
     private readonly Func<Task> cleanup;
     private bool allowClose;
 
-    public MainWindow(RecordingScreenViewModel screen, ApiAccessViewModel access, Func<Task> cleanup)
+    public MainWindow(RecordingScreenViewModel screen, ApiAccessViewModel access, UploadScreenViewModel upload, Func<Task> cleanup)
     {
         this.screen = screen;
         this.access = access;
+        this.upload = upload;
         this.cleanup = cleanup;
         InitializeComponent();
         DataContext = screen;
+        UploadArea.DataContext = upload;
+        // A lista é recriada a cada atualização de situação; a escolha do usuário volta para a mesma gravação.
+        screen.PropertyChanged += (_, _) => Dispatcher.BeginInvoke(RestoreSelection, System.Windows.Threading.DispatcherPriority.Background);
         guard = new ShutdownGuard(screen, ConfirmStopAndSaveAsync);
         Loaded += async (_, _) =>
         {
@@ -72,6 +78,20 @@ public partial class MainWindow : FluentWindow
     }
 
     private void OnOpenSettings(object sender, RoutedEventArgs e) => ShowSettings();
+
+    private void OnRecordingSelected(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (RecordingList.SelectedItem is RecordingListItem item)
+            upload.Select(item);
+    }
+
+    private void RestoreSelection()
+    {
+        if (upload.SelectedRecordingId is not { } id || (RecordingList.SelectedItem as RecordingListItem)?.Id == id)
+            return;
+        if (screen.Recordings.FirstOrDefault(r => r.Id == id) is { } item)
+            RecordingList.SelectedItem = item;
+    }
 
     public void ShowAndActivate()
     {

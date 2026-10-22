@@ -460,10 +460,37 @@ núcleo entregá-la ao cofre e ao probe; o `string` é imutável e fica sob o co
 não há como zerá-lo. A janela mostra a chave mascarada (últimos 4 caracteres), a mensagem de
 validação em linguagem simples, e os comandos de substituir (salvar uma nova) e remover.
 
-O app grava sem configuração. Ponto de entrada para o envio (10.0): chamar
-`ApiAccessViewModel.RequestSendAsync()` antes de enviar. Sem acesso confirmado ele dispara
-`ConfigurationRequested`, que `App.Compose` liga a `MainWindow.ShowSettings()`.
+O app grava sem configuração. O envio (10.0) chama `ApiAccessViewModel.RequestSendAsync()`
+antes de mostrar a confirmação. Sem acesso confirmado ele dispara `ConfigurationRequested`,
+que `App.Compose` liga a `MainWindow.ShowSettings()`.
+
+## Tela de envio (task 10.0)
+
+Abaixo da lista, "Transcrever" (ou "Enviar de novo para transcrição", se a gravação já está
+transcrita) age sobre a gravação selecionada. O fluxo está em `UploadScreenViewModel`
+(`src/Presentation/Uploading`, sem tipos WPF); o host só tem a view (`MainWindow.xaml`) e a composição em `App.Compose`.
+
+1. **Transcrever** verifica o acesso. Sem endereço/chave (ou com a chave recusada) abre as configurações e
+   não mostra confirmação. Sem rede para verificar, a confirmação aparece e o envio informa a falha.
+2. **Confirmação**: título, duração, tamanho aproximado e o aviso de que o áudio será processado pelo serviço
+   configurado. Nada sai antes de "Enviar para transcrição". Gravação já transcrita exige marcar o reenvio.
+3. **Enviando**: barra de progresso (percentual e MB) e "Cancelar". A lista mostra "Enviando" e, depois do
+   aceite, "Processando".
+4. **Falhas** usam as mensagens do núcleo, sem corpo de erro, chave ou URL de envio: 401 abre as configurações
+   ("Abrir configurações"), 413/422 explicam o limite, 429 mostra "Disponível a partir das HH:mm", e falha de
+   rede ou do serviço oferece "Tentar de novo" (manual, mesma chave de idempotência, sem laço). A gravação e o
+   ponto do envio permanecem; reabrir o app não envia nada.
+
+O transporte é o `UploadTransport` do núcleo com `HttpClient` real e a validação de certificado do Windows,
+sem exceção para certificado inválido. O arquivo é lido em fluxo (hash e `PUT`), nunca inteiro na memória;
+o teste do host envia 200 MB sintéticos e confere a alocação.
+
+Fora desta task (12.0): depois do aceite a gravação fica em "Processando" e ninguém consulta o job; o
+acompanhamento (`JobTracker`) e a notificação ao concluir ainda não estão ligados ao host. Uma gravação que ficou em
+"Enviando" porque o app fechou no meio do envio continua mostrando "Enviando" até a próxima ação manual de
+"Transcrever" (a retomada parcial do `PUT` também está fora do escopo).
 
 ```powershell
 dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V05*" --minimum-expected-tests 4
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V06*" --minimum-expected-tests 3
 ```
