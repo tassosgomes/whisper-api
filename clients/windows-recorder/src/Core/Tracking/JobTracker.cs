@@ -149,7 +149,7 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
         try
         {
             await notifier.NotifyAsync(recording.State == RecordingState.Transcribed
-                ? RecorderNotification.TranscriptionCompleted : RecorderNotification.TranscriptionFailed, cancellationToken).ConfigureAwait(false);
+                ? RecorderNotification.TranscriptionCompleted : RecorderNotification.TranscriptionFailed, cancellationToken, recording.Id).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         // A host notification failure must never undo a durable local result or cause repolling.

@@ -35,6 +35,7 @@ public sealed class V07TrackingTests(V06ApiFixture api) : IClassFixture<V06ApiFi
         Assert.Equal(new[] { "[00:00:01.240] Olá reunião", "[01:01:01.007] Outro trecho" }, File.ReadAllLines(rig.TextPath));
         Assert.Equal(RecordingState.Transcribed, events[^1].Recording.State);
         Assert.Equal(new[] { RecorderNotification.TranscriptionCompleted }, rig.Notifier.Notifications);
+        Assert.Equal(new Guid?[] { rig.Metadata.Id }, rig.Notifier.Targets);
         var calls = rig.Tap.Calls;
         await rig.Poll();
         Assert.Equal(calls, rig.Tap.Calls);
@@ -147,6 +148,7 @@ public sealed class V07TrackingTests(V06ApiFixture api) : IClassFixture<V06ApiFi
         Assert.True(rig.Tracker.Status(rig.Id).CanResend);
         Assert.Contains("formato", rig.Tracker.Status(rig.Id).Message);
         Assert.Equal(new[] { RecorderNotification.TranscriptionFailed }, rig.Notifier.Notifications);
+        Assert.Equal(new Guid?[] { rig.Id }, rig.Notifier.Targets);
         Assert.False(File.Exists(rig.JsonPath));
         var firstJob = rig.Metadata.JobId;
         Assert.True((await rig.Send()).Succeeded);

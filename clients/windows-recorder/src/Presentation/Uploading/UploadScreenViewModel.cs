@@ -58,6 +58,8 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
     public event PropertyChangedEventHandler? PropertyChanged;
     /// <summary>Sem acesso configurado ou com a chave recusada: o host abre as configurações.</summary>
     public event Action? ConfigurationRequested;
+    /// <summary>A seleção foi pedida por código (toque na notificação): a lista da janela acompanha a escolha.</summary>
+    public event Action<Guid>? SelectionRequested;
 
     public AsyncRelayCommand Transcribe { get; }
     public AsyncRelayCommand Confirm { get; }
@@ -156,6 +158,20 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
             notice = null;
         }
         Notify();
+    }
+
+    /// <summary>Seleciona a gravação pelo identificador (ação da notificação) e avisa a janela para mostrá-la.</summary>
+    public void SelectRecording(Guid id)
+    {
+        if (screen.Recordings.FirstOrDefault(r => r.Id == id) is { } item)
+            Select(item);
+        else
+        {
+            // A lista ainda não tem a linha: guarda a escolha; a janela a aplica quando a lista chegar.
+            selectedId = id;
+            Notify();
+        }
+        SelectionRequested?.Invoke(id);
     }
 
     public async Task TranscribeAsync()

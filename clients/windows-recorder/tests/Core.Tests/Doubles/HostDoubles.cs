@@ -76,12 +76,14 @@ public sealed class FakeCredentialVault : ICredentialVault
 public sealed class FakeNotifier : INotifier
 {
     public List<RecorderNotification> Notifications { get; } = [];
+    public List<Guid?> Targets { get; } = [];
     public bool IsRecording { get; private set; }
 
-    public ValueTask NotifyAsync(RecorderNotification notification, CancellationToken cancellationToken = default)
+    public ValueTask NotifyAsync(RecorderNotification notification, CancellationToken cancellationToken = default, Guid? recordingId = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Notifications.Add(notification);
+        Targets.Add(recordingId);
         return ValueTask.CompletedTask;
     }
 

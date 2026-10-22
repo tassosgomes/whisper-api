@@ -487,12 +487,43 @@ O transporte é o `UploadTransport` do núcleo com `HttpClient` real e a valida�
 sem exceção para certificado inválido. O arquivo é lido em fluxo (hash e `PUT`), nunca inteiro na memória;
 o teste do host envia 200 MB sintéticos e confere a alocação.
 
-Fora desta task (12.0): depois do aceite a gravação fica em "Processando" e ninguém consulta o job; o
-acompanhamento (`JobTracker`) e a notificação ao concluir ainda não estão ligados ao host. Uma gravação que ficou em
-"Enviando" porque o app fechou no meio do envio continua mostrando "Enviando" até a próxima ação manual de
-"Transcrever" (a retomada parcial do `PUT` também está fora do escopo).
+Depois do aceite a gravação fica em "Processando" e o acompanhamento (V-07, abaixo) segue o job. Uma gravação que
+ficou em "Enviando" porque o app fechou no meio do envio é marcada pelo acompanhamento como envio interrompido
+("Envio não concluído"), com "Transcrever" para enviar de novo (a retomada parcial do `PUT` está fora do escopo).
 
 ```powershell
 dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V05*" --minimum-expected-tests 4
 dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V06*" --minimum-expected-tests 3
 ```
+
+### Host: acompanhamento, lista e notificação (12.0)
+
+`App.Compose` cria um único `JobTracker` com o mesmo `RecordingRepository` do envio, `TrackingTransport`,
+`UploadTransport`, `SystemClock`, `SystemScheduler`, `WindowsConnectivity` e o `TrayIndicator` como `INotifier`.
+O `TrackingViewModel` (Presentation) inicia `JobTracker.RunAsync` em segundo plano na abertura do app, o que retoma
+as gravações `uploading`/`processing` do disco, e segue os envios novos sozinho (a passagem local é de 2 segundos).
+`Wake()` é chamado quando um envio é aceito: só importa se o acompanhamento estiver parado esperando para recomeçar
+depois de um erro inesperado (pausa de 10 s). Ele é cancelado antes de liberar a bandeja, no fechamento do app.
+
+- **Notificação:** é o balão do `NotifyIcon` que já existe na bandeja, sem pacote novo. O toast nativo (Windows App
+  SDK ou `Microsoft.Toolkit.Uwp.Notifications`) exigiria identidade de pacote/atalho com AppUserModelID e COM de
+  ativação para o app desempacotado, e traria uma dependência pesada; no Windows 10/11 o balão aparece como notificação
+  do sistema, fica na central de notificações e funciona com o app minimizado ou oculto. O `INotifier` ganhou o
+  parâmetro opcional `recordingId`: o núcleo decide quando notificar e diz a qual gravação; o texto é fixo, sem
+  conteúdo da reunião. Chamado de outra thread, o `TrayIndicator` repassa o aviso para a thread da interface.
+- **Toque na notificação:** `TrayIndicator.NotificationActivated` leva a gravação do último aviso de conclusão/falha
+  para `NotificationActivation` (Presentation), que mostra a janela (`ShowAndActivate`) e chama
+  `UploadScreenViewModel.SelectRecording`; a janela destaca a linha e rola até ela.
+- **Lista:** `RecordingListItem` ganhou `Detail` (mensagem do núcleo: processando, na fila, falha com a causa,
+  resultado expirado, "Sem conexão") e `IsOffline`. `RecordingScreenViewModel.ApplyTracking` recebe cada
+  `TrackingStatus` de qualquer thread, guarda só a última de cada gravação, e a cada 80 ms troca na lista em memória
+  apenas as linhas afetadas, sem reler o disco (como `RefreshRecordings`, usa uma única atualização da interface).
+  "Sem conexão" é aviso: o estado continua `processing`, sem falha e sem aviso do Windows.
+- **Conectividade:** `WindowsConnectivity` guarda o valor atualizado por `NetworkChange.NetworkAvailabilityChanged` e
+  `NetworkAddressChanged`, em vez de enumerar adaptadores a cada passagem.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V07*" --minimum-expected-tests 3
+```
+
+Validação manual: `tasks/prd-gravador-de-reunioes-desktop/12.0_manual_validation.md`.

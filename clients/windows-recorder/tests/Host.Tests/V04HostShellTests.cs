@@ -51,7 +51,7 @@ public sealed class V04HostShellTests : IAsyncDisposable
         public List<RecorderNotification> Notifications { get; } = [];
         public List<bool> Indicator { get; } = [];
 
-        public ValueTask NotifyAsync(RecorderNotification notification, CancellationToken cancellationToken = default)
+        public ValueTask NotifyAsync(RecorderNotification notification, CancellationToken cancellationToken = default, Guid? recordingId = null)
         {
             Notifications.Add(notification);
             return ValueTask.CompletedTask;

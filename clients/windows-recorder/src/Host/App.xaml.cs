@@ -5,12 +5,14 @@ using Whisper.Recorder.Core.Access;
 using Whisper.Recorder.Core.Diagnostics;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Recording;
+using Whisper.Recorder.Core.Tracking;
 using Whisper.Recorder.Core.Uploading;
 using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Audio;
 using Whisper.Recorder.Host.Shell;
 using Whisper.Recorder.Presentation.Access;
 using Whisper.Recorder.Presentation.Recording;
+using Whisper.Recorder.Presentation.Tracking;
 using Whisper.Recorder.Presentation.Uploading;
 using Wpf.Ui.Appearance;
 
@@ -30,6 +32,9 @@ public partial class App : Application
     private UploadTransport? uploadTransport;
     private UploadViewModel? uploadViewModel;
     private UploadScreenViewModel? uploadScreen;
+    private TrackingTransport? trackingTransport;
+    private WindowsConnectivity? connectivity;
+    private TrackingViewModel? tracking;
     private RecordingIndicatorCoordinator? coordinator;
     private TrayIndicator? tray;
     private MainWindow? window;
@@ -115,6 +120,19 @@ public partial class App : Application
             toggle: () => _ = screen.Toggle.ExecuteAsync(),
             exit: () => window.RequestExit());
         coordinator = new RecordingIndicatorCoordinator(screen, tray, [window.CreateTaskbarIndicator(), tray]);
+
+        // Acompanhamento (12.0): o tracker do núcleo decide quando notificar; o ícone da bandeja só exibe o aviso e,
+        // ao ser tocado, abre/foca a janela e seleciona a gravação. Inicia agora e retoma o que estava em processamento.
+        var activation = new NotificationActivation(uploadScreen, () => window.ShowAndActivate());
+        tray.NotificationActivated += activation.Activate;
+        trackingTransport = new TrackingTransport();
+        connectivity = new WindowsConnectivity();
+        var tracker = new JobTracker(repository, configuration, vault, trackingTransport, uploadTransport,
+            connectivity, clock, new SystemScheduler(), tray);
+        tracking = new TrackingViewModel(tracker, screen, new SystemScheduler());
+        // Novo envio aceito: se o acompanhamento estiver esperando para recomeçar, recomeça agora.
+        uploadViewModel.RecordingChanged += tracking.Wake;
+        tracking.Start();
     }
 
     /// <summary>
@@ -140,6 +158,8 @@ public partial class App : Application
     {
         if (cleanup is null)
         {
+            // O acompanhamento para antes do ícone: um aviso tardio não pode usar a bandeja já liberada.
+            tracking?.Stop();
             // Na thread da interface: tray e coordenador pertencem a ela.
             coordinator?.Dispose();
             tray?.Dispose();
@@ -152,6 +172,10 @@ public partial class App : Application
     {
         try
         {
+            if (tracking is not null)
+                await tracking.DisposeAsync().ConfigureAwait(false);
+            connectivity?.Dispose();
+            trackingTransport?.Dispose();
             if (screen is not null)
                 await screen.DisposeAsync().ConfigureAwait(false);
             uploadScreen?.Dispose();

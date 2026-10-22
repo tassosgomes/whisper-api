@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Recording;
+using Whisper.Recorder.Core.Tracking;
 
 namespace Whisper.Recorder.Presentation.Recording;
 
@@ -40,6 +42,10 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     private int refreshScheduled;
     private long refreshRequested;
     private long refreshApplied;
+    // Acompanhamento (V-07): a última situação de cada gravação fica aqui até o próximo ciclo da interface.
+    private readonly ConcurrentDictionary<Guid, TrackingStatus> trackingPending = new();
+    private readonly ConcurrentDictionary<Guid, bool> offline = new();
+    private int trackingScheduled;
 
     public RecordingScreenViewModel(RecordingViewModel recording, IAudioCapture capture)
     {
@@ -457,7 +463,7 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
         // A numeração fecha a corrida entre leituras em andamento: só a mais recente é aplicada.
         var sequence = Interlocked.Increment(ref refreshRequested);
         IReadOnlyList<RecordingListItem> loaded;
-        try { loaded = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
+        try { loaded = recording.Recordings.Select(ItemFor).ToArray(); }
         catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException) { return; }
         context!.Post(_ =>
         {
@@ -469,16 +475,84 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
         }, null);
     }
 
+    /// <summary>
+    /// Situação do acompanhamento de uma gravação (chega de qualquer thread). Não relê o disco: a linha afetada é
+    /// trocada na lista em memória. Avisos seguidos viram um único ciclo da interface, como em <see cref="RefreshRecordings"/>.
+    /// </summary>
+    public void ApplyTracking(TrackingStatus status)
+    {
+        if (disposed)
+            return;
+        // "Sem conexão" também vale para as releituras do disco que acontecerem antes do próximo aviso do núcleo.
+        if (status.IsOffline)
+            offline[status.Recording.Id] = true;
+        else
+            offline.TryRemove(status.Recording.Id, out _);
+        trackingPending[status.Recording.Id] = status;
+        if (context is null)
+        {
+            FlushTracking();
+            return;
+        }
+        if (Interlocked.Exchange(ref trackingScheduled, 1) == 1)
+            return;
+        _ = FlushTrackingLaterAsync();
+    }
+
+    private async Task FlushTrackingLaterAsync()
+    {
+        await Task.Delay(RecordingViewModel.UpdateInterval).ConfigureAwait(false);
+        Volatile.Write(ref trackingScheduled, 0);
+        context!.Post(_ => FlushTracking(), null);
+    }
+
+    private void FlushTracking()
+    {
+        if (disposed)
+            return;
+        var updated = recordings.ToArray();
+        var changed = false;
+        var missing = false;
+        foreach (var id in trackingPending.Keys.ToArray())
+        {
+            if (!trackingPending.TryRemove(id, out var status))
+                continue;
+            var index = Array.FindIndex(updated, r => r.Id == id);
+            if (index < 0)
+            {
+                // Gravação que a lista ainda não conhece (criada em outro caminho): uma releitura resolve.
+                missing = true;
+                continue;
+            }
+            var item = RecordingListItem.From(status);
+            if (updated[index] == item)
+                continue;
+            updated[index] = item;
+            changed = true;
+        }
+        if (changed)
+        {
+            recordings = updated;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recordings)));
+        }
+        if (missing)
+            RefreshRecordings();
+    }
+
+    private RecordingListItem ItemFor(RecordingMetadata metadata) =>
+        RecordingListItem.From(new TrackingStatus(metadata,
+            metadata.State is RecordingState.Uploading or RecordingState.Processing && offline.ContainsKey(metadata.Id)));
+
     private void LoadRecordings()
     {
-        try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
+        try { recordings = recording.Recordings.Select(ItemFor).ToArray(); }
         catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException) { return; }
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recordings)));
     }
 
     private void ReloadRecordings()
     {
-        try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
+        try { recordings = recording.Recordings.Select(ItemFor).ToArray(); }
         catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException) { recordings = []; }
     }
 

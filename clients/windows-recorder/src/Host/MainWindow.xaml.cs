@@ -38,6 +38,8 @@ public partial class MainWindow : FluentWindow
             if (e.PropertyName is null or nameof(RecordingScreenViewModel.Recordings))
                 Dispatcher.BeginInvoke(RestoreSelection, System.Windows.Threading.DispatcherPriority.Background);
         };
+        // Toque na notificação: a lista mostra a gravação escolhida pelo código.
+        upload.SelectionRequested += _ => Dispatcher.BeginInvoke(RestoreSelection, System.Windows.Threading.DispatcherPriority.Background);
         guard = new ShutdownGuard(screen, ConfirmStopAndSaveAsync);
         Loaded += async (_, _) =>
         {
@@ -95,7 +97,10 @@ public partial class MainWindow : FluentWindow
         if (upload.SelectedRecordingId is not { } id || (RecordingList.SelectedItem as RecordingListItem)?.Id == id)
             return;
         if (screen.Recordings.FirstOrDefault(r => r.Id == id) is { } item)
+        {
             RecordingList.SelectedItem = item;
+            RecordingList.ScrollIntoView(item);
+        }
     }
 
     public void ShowAndActivate()
