@@ -132,6 +132,21 @@ public sealed class V04HostShellTests : IAsyncDisposable
     }
 
     [Fact]
+    public void AppIconLoadsFromTheEmbeddedResourceAndEveryTrayStateRenders()
+    {
+        RunOnSta(() =>
+        {
+            var bytes = RecorderIcons.AppIconBytes();
+            Assert.Equal(new byte[] { 0, 0, 1, 0 }, bytes[..4]); // cabeçalho ICO
+            foreach (var kind in Enum.GetValues<RecordingIndicatorKind>())
+            {
+                using var icon = RecorderIcons.RenderTrayIcon(kind);
+                Assert.True(icon.Width > 0 && icon.Height > 0);
+            }
+        });
+    }
+
+    [Fact]
     public async Task LostDeviceDuringRecordingNotifiesOnceAndShowsAWarning()
     {
         var notifier = new RecordingNotifier();

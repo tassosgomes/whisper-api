@@ -3,6 +3,7 @@
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  Title="Configurações" Width="560" Height="520" MinWidth="460" MinHeight="460"
+                 Icon="pack://application:,,,/Host;component/Assets/icon.ico"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="Mica"
                  WindowStartupLocation="CenterOwner">
@@ -11,7 +12,11 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <ui:TitleBar Grid.Row="0" Title="Configurações: acesso à API" ShowMaximize="False" ShowMinimize="False" />
+        <ui:TitleBar Grid.Row="0" Title="Configurações: acesso à API" ShowMaximize="False" ShowMinimize="False">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Host;component/Assets/icon.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24,8,24,24">
                 <TextBlock FontSize="16" FontWeight="SemiBold" Text="Acesso à API de transcrição" Margin="0,0,0,4" />

@@ -29,6 +29,8 @@ dotnet format clients/windows-recorder --verify-no-changes
 dotnet test --project clients/windows-recorder/tests/Core.Tests --minimum-expected-tests 1
 ```
 
+Ícone do app (`assets/icon/icon.ico`): usado no `.exe` (`ApplicationIcon`), no recurso `Assets/icon.ico` das janelas `MainWindow` e `ApiAccessWindow` (`Icon` e `TitleBar.Icon`) e na bandeja em repouso (`RecorderIcons.RenderTrayIcon`); gravação e pausa sobrepõem o indicador sobre ele, e a barra de tarefas mantém só o overlay.
+
 Os testes V-05 também precisam do ambiente Python 3.12 de desenvolvimento do
 repositório, com as dependências de `.[dev]` instaladas em `.venv`. Para usar
 outro ambiente, defina `WHISPER_TEST_PYTHON` com o caminho do interpretador.
