@@ -356,6 +356,112 @@ public sealed class V07TrackingTests(V06ApiFixture api) : IClassFixture<V06ApiFi
         Assert.Equal(RecordingState.Transcribed, first.Repository.Read(secondId).State);
     }
 
+    /// <summary>Segunda gravação da mesma chave, já enviada: devolve o id e conclui o job dela no servidor.</summary>
+    private async Task<Guid> SendSecond(TrackingRig first)
+    {
+        var secondId = Guid.NewGuid();
+        var secondDirectory = first.Repository.DirectoryFor(secondId);
+        Directory.CreateDirectory(secondDirectory);
+        File.Copy(first.Repository.AudioPath(first.Id), first.Repository.AudioPath(secondId));
+        File.WriteAllText(Path.Combine(secondDirectory, "metadata.json"), JsonSerializer.Serialize(
+            first.Metadata with { Id = secondId, State = RecordingState.Saved, JobId = null, UploadId = null, UploadAttempt = 0 }, TrackingRig.Options));
+        Assert.True((await first.Upload.ConfirmAndSendAsync(first.Upload.Prepare(secondId), cancellationToken: Token)).Succeeded);
+        using var completed = await api.CommandAsync(new { operation = "job_state", jobId = first.Repository.Read(secondId).JobId, status = "completed" });
+        return secondId;
+    }
+
+    [Fact]
+    public async Task CorruptMetadataOfOneRecordingDoesNotStopTheOthers()
+    {
+        await using var rig = await TrackingRig.Create(api);
+        var broken = Guid.NewGuid();
+        Directory.CreateDirectory(rig.Repository.DirectoryFor(broken));
+        File.WriteAllText(Path.Combine(rig.Repository.DirectoryFor(broken), "metadata.json"), "{ isto não é json");
+        await rig.Complete();
+
+        await rig.Poll();
+
+        Assert.Equal(RecordingState.Transcribed, rig.Metadata.State);
+        Assert.Equal(new[] { RecorderNotification.TranscriptionCompleted }, rig.Notifier.Notifications);
+        // A lista de quem tem tela continua falhando alto; só o acompanhamento ignora o ilegível.
+        Assert.ThrowsAny<JsonException>(() => rig.Repository.List());
+        Assert.Single(rig.Repository.ListReadable());
+    }
+
+    [Fact]
+    public async Task AFailureToSaveOneRecordingDoesNotInterruptTheOthersAndRecovers()
+    {
+        await using var rig = await TrackingRig.Create(api);
+        var second = await SendSecond(rig);
+        await rig.Complete();
+        // O temporário dos metadados da primeira vira pasta: salvar essa gravação falha sempre (como disco cheio).
+        Directory.CreateDirectory(rig.MetadataPath + ".tmp");
+
+        await rig.Poll();
+
+        Assert.Equal(RecordingState.Transcribed, rig.Repository.Read(second).State);
+        Assert.Equal(RecordingState.Processing, rig.Metadata.State);
+        Assert.Equal(new[] { RecorderNotification.TranscriptionCompleted }, rig.Notifier.Notifications);
+
+        Directory.Delete(rig.MetadataPath + ".tmp");
+        rig.Clock.UtcNow += TimeSpan.FromMinutes(5);
+        await rig.Poll();
+        Assert.Equal(RecordingState.Transcribed, rig.Metadata.State);
+        Assert.Equal(2, rig.Notifier.Notifications.Count);
+    }
+
+    [Fact]
+    public async Task TheSharedLockIsFreeDuringNetworkCallsAndAConcurrentChangeIsNotOverwritten()
+    {
+        await using var rig = await TrackingRig.Create(api);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Tap.Before = async (_, _) =>
+        {
+            reached.TrySetResult();
+            await release.Task;
+            return null;
+        };
+
+        var polling = rig.Poll();
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+        // Enviar, renomear ou apagar não esperam a consulta: a trava compartilhada está livre.
+        Assert.True(await rig.TrackerRepository.Operations.WaitAsync(TimeSpan.FromSeconds(1), Token));
+        rig.TrackerRepository.Operations.Release();
+        rig.Update(m => m with { Title = "Renomeada durante a consulta" });
+        release.SetResult();
+        await polling;
+
+        var after = rig.Metadata;
+        Assert.Equal("Renomeada durante a consulta", after.Title);
+        Assert.NotNull(after.PublicJobStatus);
+    }
+
+    [Fact]
+    public async Task ARecordingRemovedDuringTheNetworkCallIsNotRecreated()
+    {
+        await using var rig = await TrackingRig.Create(api);
+        await rig.Complete();
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Tap.Before = async (_, _) =>
+        {
+            reached.TrySetResult();
+            await release.Task;
+            return null;
+        };
+
+        var polling = rig.Poll();
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+        rig.Removed = true;
+        Directory.Delete(rig.Repository.DirectoryFor(rig.Id), recursive: true);
+        release.SetResult();
+        await polling;
+
+        Assert.False(Directory.Exists(rig.Repository.DirectoryFor(rig.Id)));
+        Assert.Empty(rig.Notifier.Notifications);
+    }
+
     private sealed class Connectivity : IConnectivity
     {
         public bool IsConnected { get; set; } = true;
@@ -398,6 +504,7 @@ public sealed class V07TrackingTests(V06ApiFixture api) : IClassFixture<V06ApiFi
         public HttpTap Tap { get; } = new();
         public ApiConfigurationStore Configuration { get; }
         public UploadCoordinator Upload { get; private set; } = null!;
+        public RecordingRepository TrackerRepository { get; private set; } = null!;
         public JobTracker Tracker { get; private set; } = null!;
         public RecordingMetadata Metadata => Repository.Read(Id);
         public string JsonPath => Path.Combine(Repository.DirectoryFor(Id), "result-v1.json");
@@ -433,6 +540,7 @@ public sealed class V07TrackingTests(V06ApiFixture api) : IClassFixture<V06ApiFi
         public void Reopen(IScheduler? scheduler = null)
         {
             var repository = new RecordingRepository(Repository.RootDirectory);
+            TrackerRepository = repository;
             var configuration = new ApiConfigurationStore(Path.Combine(directory, "settings.json"));
             Upload = new UploadCoordinator(repository, configuration, Vault, uploadTransport, Clock);
             Tracker = new JobTracker(repository, configuration, Vault, trackingTransport, uploadTransport,
@@ -460,9 +568,11 @@ public sealed class V07TrackingTests(V06ApiFixture api) : IClassFixture<V06ApiFi
             });
         }
         public void Update(Func<RecordingMetadata, RecordingMetadata> update) => File.WriteAllText(MetadataPath, JsonSerializer.Serialize(update(Metadata), Options));
+        /// <summary>Teste que apaga a gravação de propósito.</summary>
+        public bool Removed { get; set; }
         public void AssertPreserved()
         {
-            Assert.Equal(audio, File.ReadAllBytes(Repository.AudioPath(Id)));
+            if (!Removed) Assert.Equal(audio, File.ReadAllBytes(Repository.AudioPath(Id)));
             foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Where(p => !p.EndsWith("audio.wav", StringComparison.Ordinal)))
                 Assert.DoesNotContain(Key, File.ReadAllText(path));
         }

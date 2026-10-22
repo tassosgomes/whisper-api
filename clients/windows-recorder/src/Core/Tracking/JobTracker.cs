@@ -18,6 +18,7 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
 {
     private int running;
     private readonly Dictionary<Guid, TrackingStatus> published = [];
+    private readonly Dictionary<Guid, DateTimeOffset> memoryBackoff = [];
     public event Action<TrackingStatus>? Changed;
 
     public TrackingStatus Status(Guid id)
@@ -44,24 +45,41 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
     /// <summary>One due-work pass; also useful with a controlled clock. No audio is ever uploaded here.</summary>
     public async Task PollOnceAsync(CancellationToken cancellationToken = default)
     {
+        // The shared lock is held only to read the list and to save; network calls run without it, so sending or
+        // removing a recording is never delayed by a slow request.
+        RecordingMetadata[] active;
         await recordings.Operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            foreach (var recording in recordings.List().Where(Active))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                Publish(recording);
-                if (!connectivity.IsConnected || recording.NextPollAt > clock.UtcNow) continue;
-                await PollAsync(recording, cancellationToken).ConfigureAwait(false);
-            }
+            active = recordings.ListReadable().Where(Active).ToArray();
+            foreach (var recording in active) Publish(recording);
         }
         finally { recordings.Operations.Release(); }
+        foreach (var recording in active)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!connectivity.IsConnected || recording.NextPollAt > clock.UtcNow) continue;
+            if (memoryBackoff.TryGetValue(recording.Id, out var until) && until > clock.UtcNow) continue;
+            try { await PollAsync(recording, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            // One problematic recording (unreadable file, full disk, removed meanwhile) never stops the others.
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException
+                or InvalidOperationException or StaleRecordingException)
+            {
+                if (error is not StaleRecordingException)
+                    memoryBackoff[recording.Id] = clock.UtcNow.AddSeconds(Math.Min(60, Math.Max(10, recording.PollDelaySeconds * 2)));
+            }
+        }
     }
+
+    /// <summary>The recording changed (sent again, removed) while the network call was in flight.</summary>
+    private sealed class StaleRecordingException : Exception;
 
     private static bool Active(RecordingMetadata recording) => recording.State is RecordingState.Uploading or RecordingState.Processing;
 
-    private async Task PollAsync(RecordingMetadata recording, CancellationToken cancellationToken)
+    private async Task PollAsync(RecordingMetadata origin, CancellationToken cancellationToken)
     {
+        var recording = origin;
         try
         {
             // An upload interrupted before PUT finished still needs a manual send.
@@ -70,21 +88,21 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
                 || !recording.PutCompleted || string.IsNullOrWhiteSpace(recording.UploadId)))
             {
                 if (recording.TrackingProblem != TrackingProblem.SendRequired)
-                    Save(recording with { TrackingProblem = TrackingProblem.SendRequired });
+                    await SaveAsync(origin, recording with { TrackingProblem = TrackingProblem.SendRequired }, cancellationToken).ConfigureAwait(false);
                 return;
             }
             var address = configuration.Read();
             var key = await vault.ReadAsync(cancellationToken).ConfigureAwait(false);
             if (address is null || string.IsNullOrWhiteSpace(key))
             {
-                Retry(recording, TrackingProblem.ConfigurationRequired);
+                await RetryAsync(origin, recording, TrackingProblem.ConfigurationRequired, cancellationToken).ConfigureAwait(false);
                 return;
             }
             if (string.IsNullOrWhiteSpace(recording.JobId))
             {
                 var jobId = await uploadTransport.CompleteAsync(address, key, recording.UploadId!, cancellationToken).ConfigureAwait(false);
                 recording = recording with { State = RecordingState.Processing, JobId = jobId };
-                Save(recording);
+                await SaveAsync(origin, recording, cancellationToken).ConfigureAwait(false);
             }
             var job = await transport.GetJobAsync(address, key, recording.JobId!, cancellationToken).ConfigureAwait(false);
             recording = recording with { State = RecordingState.Processing, PublicJobStatus = job.Status?.ToString().ToLowerInvariant() };
@@ -94,10 +112,10 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
                     if (!connectivity.IsConnected) { Publish(recording); return; }
                     var json = await transport.GetResultAsync(address, key, recording.JobId!, cancellationToken).ConfigureAwait(false);
                     var problem = StoreResult(recording, json);
-                    await FinishAsync(recording with { State = RecordingState.Transcribed, TrackingProblem = problem }, cancellationToken).ConfigureAwait(false);
+                    await FinishAsync(origin, recording with { State = RecordingState.Transcribed, TrackingProblem = problem }, cancellationToken).ConfigureAwait(false);
                     break;
                 case TranscriptionStatus.Failed:
-                    await FinishAsync(recording with
+                    await FinishAsync(origin, recording with
                     {
                         State = RecordingState.Failed,
                         FailureCode = job.Failure?.Code?.ToString() ?? "TRANSCRIPTION_FAILED",
@@ -108,44 +126,53 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
                 case TranscriptionStatus.Queued:
                 case TranscriptionStatus.Processing:
                     var delay = Math.Min(30, Math.Max(2, recording.PollDelaySeconds * 2));
-                    Save(recording with { TrackingProblem = TrackingProblem.None, PollDelaySeconds = delay, NextPollAt = clock.UtcNow.AddSeconds(delay) });
+                    await SaveAsync(origin, recording with { TrackingProblem = TrackingProblem.None, PollDelaySeconds = delay, NextPollAt = clock.UtcNow.AddSeconds(delay) }, cancellationToken).ConfigureAwait(false);
                     break;
                 default:
-                    Retry(recording, TrackingProblem.Service);
+                    await RetryAsync(origin, recording, TrackingProblem.Service, cancellationToken).ConfigureAwait(false);
                     break;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (StaleRecordingException) { throw; }
         catch (ApiException error)
         {
             // Only an accepted job's 404 means its retained result is unavailable.
             if (error.ResponseStatusCode == 404 && !string.IsNullOrWhiteSpace(recording.JobId))
-                await FinishAsync(recording with { State = RecordingState.ResultExpired, TrackingProblem = TrackingProblem.None }, cancellationToken).ConfigureAwait(false);
+                await FinishAsync(origin, recording with { State = RecordingState.ResultExpired, TrackingProblem = TrackingProblem.None }, cancellationToken).ConfigureAwait(false);
             else if (error.ResponseStatusCode is 404 or 410 or 422 && string.IsNullOrWhiteSpace(recording.JobId))
-                Save(recording with { TrackingProblem = TrackingProblem.SendRequired, NextPollAt = null, PollDelaySeconds = 0 });
+                await SaveAsync(origin, recording with { TrackingProblem = TrackingProblem.SendRequired, NextPollAt = null, PollDelaySeconds = 0 }, cancellationToken).ConfigureAwait(false);
             else
-                Retry(recording, error.ResponseStatusCode is 401 or 403 ? TrackingProblem.ConfigurationRequired : TrackingProblem.Service);
+                await RetryAsync(origin, recording, error.ResponseStatusCode is 401 or 403 ? TrackingProblem.ConfigurationRequired : TrackingProblem.Service, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException) { Retry(recording, TrackingProblem.Network); }
-        catch (OperationCanceledException) { Retry(recording, TrackingProblem.Network); }
-        catch (InvalidDataException) { Retry(recording, TrackingProblem.Service); }
-        catch (IOException) { Retry(recording, TrackingProblem.Storage); }
-        catch (UnauthorizedAccessException) { Retry(recording, TrackingProblem.Storage); }
-        catch (JsonException) { Retry(recording, TrackingProblem.Service); }
-        catch (InvalidOperationException) { Retry(recording, TrackingProblem.Service); }
-        catch (FormatException) { Retry(recording, TrackingProblem.Service); }
-        catch (KeyNotFoundException) { Retry(recording, TrackingProblem.Service); }
+        catch (HttpRequestException) { await RetryAsync(origin, recording, TrackingProblem.Network, cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) { await RetryAsync(origin, recording, TrackingProblem.Network, cancellationToken).ConfigureAwait(false); }
+        catch (InvalidDataException) { await RetryAsync(origin, recording, TrackingProblem.Service, cancellationToken).ConfigureAwait(false); }
+        catch (IOException) { await RetryAsync(origin, recording, TrackingProblem.Storage, cancellationToken).ConfigureAwait(false); }
+        catch (UnauthorizedAccessException) { await RetryAsync(origin, recording, TrackingProblem.Storage, cancellationToken).ConfigureAwait(false); }
+        catch (JsonException) { await RetryAsync(origin, recording, TrackingProblem.Service, cancellationToken).ConfigureAwait(false); }
+        catch (InvalidOperationException) { await RetryAsync(origin, recording, TrackingProblem.Service, cancellationToken).ConfigureAwait(false); }
+        catch (FormatException) { await RetryAsync(origin, recording, TrackingProblem.Service, cancellationToken).ConfigureAwait(false); }
+        catch (KeyNotFoundException) { await RetryAsync(origin, recording, TrackingProblem.Service, cancellationToken).ConfigureAwait(false); }
     }
 
-    private void Retry(RecordingMetadata recording, TrackingProblem problem)
+    /// <summary>Best effort: when even the failure cannot be saved (full disk), back off in memory and keep going.</summary>
+    private async Task RetryAsync(RecordingMetadata origin, RecordingMetadata recording, TrackingProblem problem, CancellationToken cancellationToken)
     {
         var delay = Math.Min(60, Math.Max(10, recording.PollDelaySeconds * 2));
-        Save(recording with { TrackingProblem = problem, PollDelaySeconds = delay, NextPollAt = clock.UtcNow.AddSeconds(delay) });
+        try
+        {
+            await SaveAsync(origin, recording with { TrackingProblem = problem, PollDelaySeconds = delay, NextPollAt = clock.UtcNow.AddSeconds(delay) }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        {
+            memoryBackoff[recording.Id] = clock.UtcNow.AddSeconds(delay);
+        }
     }
 
-    private async Task FinishAsync(RecordingMetadata recording, CancellationToken cancellationToken)
+    private async Task FinishAsync(RecordingMetadata origin, RecordingMetadata recording, CancellationToken cancellationToken)
     {
-        Save(recording with { NextPollAt = null, PollDelaySeconds = 0 });
+        await SaveAsync(origin, recording with { NextPollAt = null, PollDelaySeconds = 0 }, cancellationToken).ConfigureAwait(false);
         try
         {
             await notifier.NotifyAsync(recording.State == RecordingState.Transcribed
@@ -192,10 +219,36 @@ public sealed class JobTracker(RecordingRepository recordings, ApiConfigurationS
         AtomicFile.Replace(temporary, path);
     }
 
-    private void Save(RecordingMetadata recording)
+    /// <summary>
+    /// Applies the tracker-owned fields to what is on disk now, under the shared lock, and only if the recording is still
+    /// the same attempt and job. A concurrent send, rename or removal is never overwritten.
+    /// </summary>
+    private async Task SaveAsync(RecordingMetadata origin, RecordingMetadata updated, CancellationToken cancellationToken)
     {
-        recordings.Save(recording);
-        Publish(recording);
+        await recordings.Operations.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RecordingMetadata current;
+            try { current = recordings.Read(origin.Id); }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { throw new StaleRecordingException(); }
+            if (!Active(current) || current.UploadAttempt != origin.UploadAttempt || current.UploadId != origin.UploadId
+                || (current.JobId is not null && current.JobId != updated.JobId))
+                throw new StaleRecordingException();
+            var merged = current with
+            {
+                State = updated.State,
+                JobId = updated.JobId,
+                PublicJobStatus = updated.PublicJobStatus,
+                FailureCode = updated.FailureCode,
+                TrackingProblem = updated.TrackingProblem,
+                NextPollAt = updated.NextPollAt,
+                PollDelaySeconds = updated.PollDelaySeconds
+            };
+            recordings.Save(merged);
+            memoryBackoff.Remove(origin.Id);
+            Publish(merged);
+        }
+        finally { recordings.Operations.Release(); }
     }
 
     private void Publish(RecordingMetadata recording)

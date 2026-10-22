@@ -181,7 +181,7 @@ public sealed class V09ManagementTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task DeletionWaitsForInflightPollAndNoLateWriteRecreatesFiles(bool all)
+    public async Task DeletionDoesNotWaitForInflightPollAndNoLateWriteRecreatesFiles(bool all)
     {
         using var rig = new ManagementRig();
         rig.SetState(RecordingState.Processing);
@@ -190,10 +190,10 @@ public sealed class V09ManagementTests
         await rig.Http.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Token);
         var deleting = all ? rig.Management.DeleteAllAsync(confirmed: true, Token)
             : rig.Management.DeleteAsync(rig.Id, confirmed: true, pendingTranscriptionConfirmed: true, Token);
-        Assert.False(deleting.IsCompleted);
+        // O acompanhamento não segura a trava durante a rede: apagar não espera a consulta.
+        Assert.Equal(ManagementOutcome.Completed, await deleting.WaitAsync(TimeSpan.FromSeconds(10), Token));
         rig.Http.Continue.TrySetResult();
         await polling;
-        Assert.Equal(ManagementOutcome.Completed, await deleting);
         await rig.Tracker.PollOnceAsync(Token);
         Assert.Equal(1, rig.Http.Requests);
         Assert.False(Directory.Exists(rig.Repository.DirectoryFor(rig.Id)));

@@ -35,7 +35,7 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     private string? previewError;
     private bool refreshing;
     private bool refreshAgain;
-    private bool disposed;
+    private volatile bool disposed;
     private bool shuttingDown;
     private bool initialized;
     private (bool, bool, int, string?) lastShape;

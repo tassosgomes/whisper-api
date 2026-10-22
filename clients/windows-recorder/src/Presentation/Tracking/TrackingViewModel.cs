@@ -15,7 +15,7 @@ public sealed class TrackingViewModel(JobTracker tracker, RecordingScreenViewMod
     public static readonly TimeSpan RestartDelay = TimeSpan.FromSeconds(10);
 
     private readonly CancellationTokenSource cancellation = new();
-    private readonly SemaphoreSlim wake = new(0);
+    private readonly SemaphoreSlim wake = new(0, 1);
     private Task? run;
     private int started;
 
@@ -34,8 +34,10 @@ public sealed class TrackingViewModel(JobTracker tracker, RecordingScreenViewMod
     /// <summary>Um envio foi aceito: se o acompanhamento estiver esperando para recomeçar, recomeça agora.</summary>
     public void Wake()
     {
-        if (wake.CurrentCount == 0)
-            wake.Release();
+        // No máximo uma permissão pendente: avisos repetidos durante o ciclo normal não se acumulam.
+        try { wake.Release(); }
+        catch (SemaphoreFullException) { }
+        catch (ObjectDisposedException) { }
     }
 
     /// <summary>Pede o encerramento sem esperar; usado antes de liberar o resto do host.</summary>
@@ -49,6 +51,8 @@ public sealed class TrackingViewModel(JobTracker tracker, RecordingScreenViewMod
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            // Uma permissão sobrando de antes não pode fazer o próximo reinício pular a pausa.
+            while (wake.Wait(0)) { }
             try
             {
                 await tracker.RunAsync(cancellationToken).ConfigureAwait(false);
@@ -76,7 +80,14 @@ public sealed class TrackingViewModel(JobTracker tracker, RecordingScreenViewMod
     {
         Stop();
         if (run is not null)
-            await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+        {
+            var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+            // Se o ciclo ainda estiver ativo (espera longa), o token e o semáforo continuam em uso: não são descartados.
+            if (finished != run)
+                return;
+            try { await run.ConfigureAwait(false); }
+            catch (Exception) { }
+        }
         wake.Dispose();
         cancellation.Dispose();
     }

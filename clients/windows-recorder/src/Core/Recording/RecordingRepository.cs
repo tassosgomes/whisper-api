@@ -77,4 +77,29 @@ public sealed class RecordingRepository
         .Where(File.Exists)
         .Select(p => JsonSerializer.Deserialize<RecordingMetadata>(File.ReadAllText(p), JsonOptions)!)
         .OrderByDescending(m => m.CreatedAt).ThenByDescending(m => m.Id).ToArray();
+
+    /// <summary>
+    /// Like <see cref="List"/>, but a recording whose metadata is corrupt, missing or locked is skipped instead of failing the
+    /// whole listing. Used by background work (tracking) that must not stop because of one bad recording.
+    /// </summary>
+    internal IReadOnlyList<RecordingMetadata> ListReadable()
+    {
+        if (!Directory.Exists(RootDirectory)) return [];
+        var result = new List<RecordingMetadata>();
+        IEnumerable<string> directories;
+        try { directories = Directory.EnumerateDirectories(RootDirectory).ToArray(); }
+        catch (IOException) { return []; }
+        catch (UnauthorizedAccessException) { return []; }
+        foreach (var directory in directories)
+        {
+            try
+            {
+                var path = Path.Combine(directory, "metadata.json");
+                if (File.Exists(path) && JsonSerializer.Deserialize<RecordingMetadata>(File.ReadAllText(path), JsonOptions) is { } metadata)
+                    result.Add(metadata);
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
+        }
+        return result.OrderByDescending(m => m.CreatedAt).ThenByDescending(m => m.Id).ToArray();
+    }
 }
