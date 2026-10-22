@@ -7,6 +7,7 @@ public sealed class FakeAudioCapture : IAudioCapture
     public List<AudioDevice> Devices { get; } = [];
     public HashSet<AudioSourceKind> ActiveSources { get; } = [];
     public AudioSourceKind? DeniedSource { get; set; }
+    public Exception? StopFailure { get; set; }
     public event Action<AudioPcmBlock>? BlockAvailable;
     public event Action<AudioLevel>? LevelChanged;
     public event Action<AudioDeviceAvailability>? DeviceAvailabilityChanged;
@@ -30,6 +31,8 @@ public sealed class FakeAudioCapture : IAudioCapture
     public ValueTask StopAsync(AudioSourceKind source, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (StopFailure is not null)
+            throw StopFailure;
         ActiveSources.Remove(source);
         return ValueTask.CompletedTask;
     }

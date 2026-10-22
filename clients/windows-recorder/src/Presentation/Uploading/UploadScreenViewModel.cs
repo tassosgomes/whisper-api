@@ -166,7 +166,7 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             // Sem acesso confirmado, RequestSendAsync pede as configurações (primeiro envio); nada é preparado.
-            var ready = await access.RequestSendAsync();
+            var ready = await Task.Run(() => access.RequestSendAsync());
             if (!ready && access.Status is ApiAccessStatus.Absent or ApiAccessStatus.Rejected)
             {
                 hint = access.Status == ApiAccessStatus.Absent

@@ -32,7 +32,12 @@ public partial class MainWindow : FluentWindow
         DataContext = screen;
         UploadArea.DataContext = upload;
         // A lista é recriada a cada atualização de situação; a escolha do usuário volta para a mesma gravação.
-        screen.PropertyChanged += (_, _) => Dispatcher.BeginInvoke(RestoreSelection, System.Windows.Threading.DispatcherPriority.Background);
+        screen.PropertyChanged += (_, e) =>
+        {
+            // Só quando a lista pode ter sido recriada; cronômetro e níveis não passam por aqui.
+            if (e.PropertyName is null or nameof(RecordingScreenViewModel.Recordings))
+                Dispatcher.BeginInvoke(RestoreSelection, System.Windows.Threading.DispatcherPriority.Background);
+        };
         guard = new ShutdownGuard(screen, ConfirmStopAndSaveAsync);
         Loaded += async (_, _) =>
         {

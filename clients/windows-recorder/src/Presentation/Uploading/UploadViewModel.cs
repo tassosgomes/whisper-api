@@ -45,8 +45,10 @@ public sealed class UploadViewModel : INotifyPropertyChanged, IDisposable
         Notify();
         try
         {
-            var result = await coordinator.ConfirmAndSendAsync(Confirmation, existingTranscriptionConfirmed,
-                new ProgressSink(Report), cancellationToken).ConfigureAwait(false);
+            var confirmation = Confirmation;
+            // Leitura de metadados, cofre e hash do arquivo: nada disso roda na thread da interface.
+            var result = await Task.Run(() => coordinator.ConfirmAndSendAsync(confirmation, existingTranscriptionConfirmed,
+                new ProgressSink(Report), cancellationToken), CancellationToken.None).ConfigureAwait(false);
             Dispatch(() =>
             {
                 Result = result;

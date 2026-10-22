@@ -14,18 +14,23 @@ public sealed class RecordingViewModel : INotifyPropertyChanged, IDisposable
     {
         this.session = session;
         this.repository = repository;
+        snapshot = session.Snapshot;
         session.Changed += OnChanged;
     }
 
+    // Lido uma vez por atualização: estado, pausa, duração, níveis e avisos vêm do mesmo instante.
+    private volatile SessionSnapshot snapshot;
+    private volatile bool disposed;
+
     public event PropertyChangedEventHandler? PropertyChanged;
-    public bool IsRecording => session.IsRecording;
-    public bool IsPaused => session.IsPaused;
-    public TimeSpan Duration => session.Current?.Duration ?? TimeSpan.Zero;
-    public RecordingState? State => session.Current?.State;
-    public Guid? CurrentId => session.Current?.Id;
-    public IReadOnlyDictionary<AudioSourceKind, float> Levels => session.Levels;
-    public IReadOnlyDictionary<AudioSourceKind, bool> Sources => session.SourceAvailability;
-    public IReadOnlyList<RecordingWarning> Warnings => session.Current?.Warnings ?? [];
+    public bool IsRecording => snapshot.IsRecording;
+    public bool IsPaused => snapshot.IsPaused;
+    public TimeSpan Duration => snapshot.Current?.Duration ?? TimeSpan.Zero;
+    public RecordingState? State => snapshot.Current?.State;
+    public Guid? CurrentId => snapshot.Current?.Id;
+    public IReadOnlyDictionary<AudioSourceKind, float> Levels => snapshot.Levels;
+    public IReadOnlyDictionary<AudioSourceKind, bool> Sources => snapshot.Availability;
+    public IReadOnlyList<RecordingWarning> Warnings => snapshot.Current?.Warnings ?? [];
     public IReadOnlyList<RecordingMetadata> Recordings => repository.List();
     public string? Error { get; private set; }
     public string? ThirdPartyNotice => IsRecording
@@ -47,20 +52,86 @@ public sealed class RecordingViewModel : INotifyPropertyChanged, IDisposable
         {
             Error = "Acesso ao microfone negado. Libere o acesso nas configurações de privacidade do Windows ou escolha só o áudio do sistema.";
         }
+        Refresh();
+    }
+
+    public void Pause()
+    {
+        session.Pause();
+        Refresh();
+    }
+
+    public void Resume()
+    {
+        session.Resume();
+        Refresh();
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        try { await session.StopAsync(cancellationToken); }
+        finally { Refresh(); }
+    }
+
+    // Ação do usuário concluída (thread da interface): relê o instantâneo na hora, sem esperar a coalescência.
+    private void Refresh()
+    {
+        snapshot = session.Snapshot;
         OnChanged();
     }
 
-    public void Pause() => session.Pause();
-    public void Resume() => session.Resume();
-    public Task StopAsync(CancellationToken cancellationToken = default) => session.StopAsync(cancellationToken);
+    /// <summary>Intervalo mínimo entre atualizações da interface vindas da captura (cerca de 12 Hz).</summary>
+    public static readonly TimeSpan UpdateInterval = TimeSpan.FromMilliseconds(80);
 
+    private int scheduled;
+    private long lastRaised;
+
+    // A captura avisa a cada bloco e a cada nível (centenas de vezes por segundo). De outra thread, no máximo
+    // uma atualização fica pendente e ela sempre lê o estado mais recente; na thread da interface (ou sem
+    // contexto, nos testes) o aviso é imediato.
     private void OnChanged()
     {
-        if (context is not null && SynchronizationContext.Current != context)
-            context.Post(_ => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null)), null);
-        else
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
+        if (context is null || SynchronizationContext.Current == context)
+        {
+            Raise();
+            return;
+        }
+        if (Interlocked.Exchange(ref scheduled, 1) == 1)
+            return;
+        _ = PostLaterAsync();
     }
 
-    public void Dispose() => session.Changed -= OnChanged;
+    private async Task PostLaterAsync()
+    {
+        try
+        {
+            var wait = UpdateInterval - TimeSpan.FromMilliseconds(Environment.TickCount64 - Interlocked.Read(ref lastRaised));
+            if (wait > TimeSpan.Zero)
+                await Task.Delay(wait).ConfigureAwait(false);
+            context!.Post(_ =>
+            {
+                Volatile.Write(ref scheduled, 0);
+                if (!disposed)
+                    Raise();
+            }, null);
+        }
+        catch
+        {
+            // Contexto encerrado: sem isto a coalescência ficaria presa e nenhuma atualização mais sairia.
+            Volatile.Write(ref scheduled, 0);
+        }
+    }
+
+    private void Raise()
+    {
+        snapshot = session.Snapshot;
+        Interlocked.Exchange(ref lastRaised, Environment.TickCount64);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        session.Changed -= OnChanged;
+    }
 }

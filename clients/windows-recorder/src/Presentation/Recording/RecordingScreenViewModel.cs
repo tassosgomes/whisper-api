@@ -36,6 +36,10 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     private bool disposed;
     private bool shuttingDown;
     private bool initialized;
+    private (bool, bool, int, string?) lastShape;
+    private int refreshScheduled;
+    private long refreshRequested;
+    private long refreshApplied;
 
     public RecordingScreenViewModel(RecordingViewModel recording, IAudioCapture capture)
     {
@@ -359,7 +363,16 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
         var nowRecording = recording.IsRecording;
         var ended = wasRecording && !nowRecording && !disposed;
         wasRecording = nowRecording;
-        Raise();
+        // Cronômetro e níveis chegam em alta frequência: só as propriedades afetadas são avisadas. Mudança de
+        // estado (gravando, pausa, avisos, erro) reavalia a tela toda.
+        var shape = (nowRecording, recording.IsPaused, recording.Warnings.Count, recording.Error);
+        if (shape != lastShape)
+        {
+            lastShape = shape;
+            Raise();
+        }
+        else
+            RaiseTick();
         if (ended)
             _ = FinishedAsync();
     }
@@ -425,20 +438,60 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     {
         if (disposed)
             return;
-        if (context is not null && SynchronizationContext.Current != context)
+        if (context is null)
         {
-            context.Post(_ => RefreshRecordings(), null);
+            // Sem contexto de interface (testes): relê na hora.
+            LoadRecordings();
             return;
         }
+        // Vários avisos seguidos viram uma única leitura, feita fora da thread da interface.
+        if (Interlocked.Exchange(ref refreshScheduled, 1) == 1)
+            return;
+        _ = RefreshLaterAsync();
+    }
+
+    private async Task RefreshLaterAsync()
+    {
+        await Task.Delay(RecordingViewModel.UpdateInterval).ConfigureAwait(false);
+        Volatile.Write(ref refreshScheduled, 0);
+        // A numeração fecha a corrida entre leituras em andamento: só a mais recente é aplicada.
+        var sequence = Interlocked.Increment(ref refreshRequested);
+        IReadOnlyList<RecordingListItem> loaded;
+        try { loaded = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException) { return; }
+        context!.Post(_ =>
+        {
+            if (disposed || sequence < refreshApplied)
+                return;
+            refreshApplied = sequence;
+            recordings = loaded;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recordings)));
+        }, null);
+    }
+
+    private void LoadRecordings()
+    {
         try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
         catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException) { return; }
-        Raise();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recordings)));
     }
 
     private void ReloadRecordings()
     {
         try { recordings = recording.Recordings.Select(RecordingListItem.From).ToArray(); }
         catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException) { recordings = []; }
+    }
+
+    private static readonly string[] TickProperties =
+    [
+        nameof(DurationText), nameof(Indicator), nameof(MicrophoneLevel), nameof(SystemLevel),
+        nameof(MicrophoneStatus), nameof(SystemStatus)
+    ];
+
+    private void RaiseTick()
+    {
+        foreach (var name in TickProperties)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
     private void Raise()

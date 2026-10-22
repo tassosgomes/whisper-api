@@ -45,11 +45,32 @@ public sealed class RecordingSession : IAsyncDisposable
     }
 
     public event Action? Changed;
-    public RecordingMetadata? Current { get { lock (sync) return current; } }
-    public bool IsRecording { get { lock (sync) return wav is not null; } }
-    public bool IsPaused { get { lock (sync) return paused; } }
-    public IReadOnlyDictionary<AudioSourceKind, bool> SourceAvailability { get { lock (sync) return new Dictionary<AudioSourceKind, bool>(available); } }
-    public IReadOnlyDictionary<AudioSourceKind, float> Levels { get { lock (sync) return new Dictionary<AudioSourceKind, float>(levels); } }
+
+    // Leituras da interface: um único instantâneo imutável, publicado sob o lock e lido sem lock. A captura e o
+    // disco nunca fazem a interface esperar, e quem lê vê estado, pausa, disponibilidade e níveis do mesmo momento.
+    private volatile SessionSnapshot snapshot = new(null, false, false, new Dictionary<AudioSourceKind, bool>(), new Dictionary<AudioSourceKind, float>());
+
+    public SessionSnapshot Snapshot => snapshot;
+    public RecordingMetadata? Current => snapshot.Current;
+    public bool IsRecording => snapshot.IsRecording;
+    public bool IsPaused => snapshot.IsPaused;
+    public IReadOnlyDictionary<AudioSourceKind, bool> SourceAvailability => snapshot.Availability;
+    public IReadOnlyDictionary<AudioSourceKind, float> Levels => snapshot.Levels;
+
+    private bool IsRecordingLocked { get { lock (sync) return wav is not null; } }
+
+    // Chamar com o lock: publica o estado atual e avisa a interface.
+    private void Publish()
+    {
+        snapshot = new SessionSnapshot(current, wav is not null, paused,
+            new Dictionary<AudioSourceKind, bool>(available), new Dictionary<AudioSourceKind, float>(levels));
+    }
+
+    private void Notify()
+    {
+        Publish();
+        Changed?.Invoke();
+    }
 
     public async Task StartAsync(IReadOnlyList<AudioDevice> devices, CancellationToken cancellationToken = default)
     {
@@ -61,7 +82,7 @@ public sealed class RecordingSession : IAsyncDisposable
                 throw new InvalidOperationException("Escolha ao menos uma fonte de áudio para gravar.");
             if (devices.Select(d => d.Source).Distinct().Count() != devices.Count)
                 throw new ArgumentException("Escolha apenas um dispositivo por fonte.", nameof(devices));
-            if (IsRecording)
+            if (IsRecordingLocked)
                 throw new InvalidOperationException("Já há uma gravação em curso.");
             if (timer is not null)
                 await timer;
@@ -87,6 +108,7 @@ public sealed class RecordingSession : IAsyncDisposable
                     levels[device.Source] = 0;
                     selectedDevices[device.Source] = device.Id;
                 }
+                Publish();
             }
             var started = new List<AudioSourceKind>();
             try
@@ -104,6 +126,7 @@ public sealed class RecordingSession : IAsyncDisposable
                 {
                     Warn(RecordingWarning.CaptureFailed);
                     Finish(RecordingState.Interrupted);
+                    Publish();
                 }
                 foreach (var source in started)
                     await capture.StopAsync(source, CancellationToken.None);
@@ -111,7 +134,8 @@ public sealed class RecordingSession : IAsyncDisposable
             }
             timerCancellation = new CancellationTokenSource();
             timer = RunTimerAsync(timerCancellation.Token);
-            Changed?.Invoke();
+            lock (sync)
+                Notify();
         }
         finally { lifecycle.Release(); }
     }
@@ -171,7 +195,7 @@ public sealed class RecordingSession : IAsyncDisposable
                 Warn(RecordingWarning.DiskFull);
                 Finish(RecordingState.Saved);
             }
-            Changed?.Invoke();
+            Notify();
         }
     }
 
@@ -190,7 +214,7 @@ public sealed class RecordingSession : IAsyncDisposable
                 levels[source] = 0;
             wav.Checkpoint();
             repository.Save(current!);
-            Changed?.Invoke();
+            Notify();
         }
     }
 
@@ -203,7 +227,7 @@ public sealed class RecordingSession : IAsyncDisposable
             segmentFrames = wav.Frames;
             segmentStart = clock.UtcNow;
             paused = false;
-            Changed?.Invoke();
+            Notify();
         }
     }
 
@@ -219,9 +243,17 @@ public sealed class RecordingSession : IAsyncDisposable
                     Finish(RecordingState.Saved);
                 timerCancellation?.Cancel();
             }
-            if (timer is not null)
-                await timer;
-            Changed?.Invoke();
+            try
+            {
+                if (timer is not null)
+                    await timer;
+            }
+            finally
+            {
+                // Também quando parar um dispositivo falha: a tela precisa ver que a gravação terminou.
+                lock (sync)
+                    Notify();
+            }
         }
         finally { lifecycle.Release(); }
     }
@@ -240,6 +272,7 @@ public sealed class RecordingSession : IAsyncDisposable
         foreach (var source in levels.Keys)
             levels[source] = 0;
         repository.Save(current);
+        Publish();
     }
 
     private void Warn(RecordingWarning warning)
@@ -252,7 +285,7 @@ public sealed class RecordingSession : IAsyncDisposable
     {
         try
         {
-            while (IsRecording)
+            while (IsRecordingLocked)
             {
                 await scheduler.DelayAsync(TimeSpan.FromMilliseconds(100), cancellationToken);
                 Tick();
@@ -262,7 +295,10 @@ public sealed class RecordingSession : IAsyncDisposable
         finally
         {
             // Use a fresh token: stopping a recording must release every device even on cancellation.
-            foreach (var source in Current!.Sources)
+            AudioSourceKind[] sources;
+            lock (sync)
+                sources = current!.Sources;
+            foreach (var source in sources)
                 await capture.StopAsync(source, CancellationToken.None);
         }
     }
@@ -284,6 +320,7 @@ public sealed class RecordingSession : IAsyncDisposable
         {
             if (wav is null || (!paused && available.GetValueOrDefault(level.Source)))
                 levels[level.Source] = Math.Clamp(level.Peak, 0, 1);
+            snapshot = snapshot with { Levels = new Dictionary<AudioSourceKind, float>(levels) };
             Changed?.Invoke();
         }
     }
@@ -301,13 +338,13 @@ public sealed class RecordingSession : IAsyncDisposable
                 levels[change.Device.Source] = 0;
                 Warn(RecordingWarning.DeviceLost);
                 repository.Save(current!);
-                Changed?.Invoke();
+                Notify();
             }
             else if (!available[change.Device.Source])
             {
                 // O dispositivo voltou e o host reabriu a captura: os blocos voltam a entrar na linha do tempo.
                 available[change.Device.Source] = true;
-                Changed?.Invoke();
+                Notify();
             }
         }
     }
@@ -325,3 +362,11 @@ public sealed class RecordingSession : IAsyncDisposable
         lifecycle.Dispose();
     }
 }
+
+/// <summary>Estado da sessão num único momento: imutável, seguro para ler de qualquer thread.</summary>
+public sealed record SessionSnapshot(
+    RecordingMetadata? Current,
+    bool IsRecording,
+    bool IsPaused,
+    IReadOnlyDictionary<AudioSourceKind, bool> Availability,
+    IReadOnlyDictionary<AudioSourceKind, float> Levels);
