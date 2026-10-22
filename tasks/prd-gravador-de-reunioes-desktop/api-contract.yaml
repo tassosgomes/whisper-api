@@ -1,0 +1,915 @@
+openapi: 3.1.0
+info:
+  title: Whisper — envio direto de áudio para transcrição
+  version: 1.1.0
+  description: |
+    Contrato do recorte HTTP do PRD do gravador de reuniões (CAP-004, RF-10 e
+    RF-05): a API passa a aceitar o arquivo de áudio enviado pelo próprio
+    cliente, além da URL assinada de leitura já aprovada na versão 1.0.0
+    (tasks/prd-api-transcricao-assincrona/api-contract.yaml).
+
+    Fonte: tasks/prd-gravador-de-reunioes-desktop/prd.md v1.0, aprovado em
+    2026-10-21; ADR-001 (bucket S3 privado sob controle do Whisper).
+
+    Forma do envio, decidida em 2026-10-21: o cliente pede uma URL de envio à
+    API, envia os bytes direto ao armazenamento do Whisper com um PUT nessa
+    URL (fora desta API, em HTTPS) e confirma a conclusão à API, que então cria
+    o mesmo job de CAP-001. A API não recebe o corpo do arquivo. O PUT ao
+    armazenamento não é uma operação deste documento: ele usa o método, a URL e
+    os cabeçalhos devolvidos por createTranscriptionUpload e responde com os
+    códigos do armazenamento. É a exceção de mídia não JSON prevista pela norma
+    HTTP local; todas as operações deste documento usam JSON.
+
+    Compatibilidade: adição. O fluxo POST /v1/transcriptions com sourceUrl não
+    muda. As operações getTranscription e getTranscriptionResult aparecem aqui
+    sem alteração, porque o cliente do envio direto as consome; a fonte delas
+    continua sendo a versão 1.0.0.
+
+    Estados: um job criado por envio direto começa em queued, porque a mídia já
+    está no armazenamento. O estado downloading não ocorre para ele.
+  contact:
+    name: Equipe Whisper
+
+servers:
+  - url: /v1
+    description: Prefixo versionado; host e ambiente são definidos por implantação.
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Transcription uploads
+    description: Envio direto do arquivo de áudio e criação do job a partir dele.
+  - name: Transcriptions
+    description: Consulta de jobs e resultados (inalterado em relação à versão 1.0.0).
+
+paths:
+  /transcription-uploads:
+    post:
+      summary: Pedir URL de envio de áudio
+      description: |
+        Registra um envio de áudio e devolve a URL pré-assinada para o cliente
+        enviar os bytes ao armazenamento do Whisper com PUT. Nenhum job é criado
+        aqui. O cliente declara o tipo, o tamanho exato em bytes e o SHA-256 do
+        arquivo; a URL só aceita um objeto com esses valores.
+
+        Limites: até 5 GiB, até 2 horas de áudio e os tipos de conteúdo listados
+        em ContentType (equivalentes às extensões .mp4, .mkv, .webm, .mp3, .wav
+        e .m4a). Tipo fora da lista, tamanho acima do limite ou durationMs
+        acima de 2 horas informado pelo cliente são recusados aqui, sem criar
+        registro. A duração real só é medida no processamento: um arquivo acima
+        de 2 horas que declarou menos termina o job em
+        failed/MEDIA_DURATION_LIMIT_EXCEEDED.
+
+        Idempotência: a Idempotency-Key é escopada por conta e credential_id e
+        vale por 24 horas a partir do primeiro aceite e, se o envio virar job,
+        até 24 horas após o estado terminal do job. Repetir o pedido com os
+        mesmos valores devolve o mesmo uploadId (200). Enquanto o envio não for
+        concluído, a resposta traz uma URL válida, reemitida se a anterior
+        expirou. Depois de concluído, a resposta traz o jobId e nenhuma URL.
+        Corpo diferente com a mesma chave retorna 409 IDEMPOTENCY_KEY_REUSED. Um
+        envio já recusado (UPLOAD_REJECTED) exige uma nova chave.
+
+        A URL de envio é um segredo temporário: não deve ser registrada em logs,
+        traces nem mensagens de erro, nem pelo cliente nem pelo Whisper. Vale
+        para um único objeto, método PUT e os cabeçalhos devolvidos, e expira em
+        expiresAt. Envios iniciados e não concluídos expiram 24 horas após o
+        pedido e o objeto é removido.
+
+        O número de envios pendentes por credencial é limitado (valor definido
+        na TechSpec); acima dele, 429 com Retry-After.
+      operationId: createTranscriptionUpload
+      tags:
+        - Transcription uploads
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >-
+            Chave estável por arquivo a enviar, escolhida pelo cliente. Escopada
+            por conta e credential_id. Vale por 24 horas, ou até 24 horas após o
+            estado terminal do job criado a partir do envio.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            examples:
+              - rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTranscriptionUploadRequest'
+            examples:
+              wav:
+                value:
+                  contentType: audio/wav
+                  sizeBytes: 230400000
+                  checksumSha256: 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
+                  durationMs: 7200000
+                  clientReference: rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+      responses:
+        '201':
+          description: Envio registrado; a URL de envio está pronta para o PUT.
+          headers:
+            Location:
+              description: Referência do envio.
+              schema:
+                type: string
+                format: uri-reference
+                examples:
+                  - /v1/transcription-uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptionUpload'
+              examples:
+                created:
+                  value:
+                    uploadId: upl_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    expiresAt: '2026-10-21T15:30:00Z'
+                    upload:
+                      method: PUT
+                      url: https://storage.example.test/whisper-temporary/uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC?signature=not-a-real-signature
+                      headers:
+                        Content-Type: audio/wav
+                        Content-Length: '230400000'
+                        x-amz-checksum-sha256: 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
+                    completeUrl: /v1/transcription-uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC/complete
+                    clientReference: rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        '200':
+          description: >-
+            Repetição com os mesmos valores: devolve o mesmo envio, com URL
+            válida se ainda pendente ou com o jobId se já concluído.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptionUpload'
+              examples:
+                alreadyCompleted:
+                  value:
+                    uploadId: upl_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    expiresAt: '2026-10-21T15:30:00Z'
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    clientReference: rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        '400':
+          description: Corpo JSON malformado, Idempotency-Key ausente ou campo obrigatório ausente.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                invalidRequest:
+                  value:
+                    type: about:blank
+                    title: Requisição inválida
+                    status: 400
+                    code: INVALID_REQUEST
+                    instance: /v1/transcription-uploads
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: >-
+            A chave de idempotência já foi usada com outros valores, ou o envio
+            dessa chave já foi recusado e exige uma chave nova.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                idempotencyConflict:
+                  value:
+                    type: about:blank
+                    title: Conflito de idempotência
+                    status: 409
+                    code: IDEMPOTENCY_KEY_REUSED
+                    instance: /v1/transcription-uploads
+                uploadRejected:
+                  value:
+                    type: about:blank
+                    title: Envio recusado
+                    status: 409
+                    code: UPLOAD_REJECTED
+                    detail: Este envio foi recusado. Use uma nova Idempotency-Key.
+                    instance: /v1/transcription-uploads
+        '413':
+          description: O tamanho declarado excede 5 GiB; nenhum envio é registrado.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                mediaSizeLimit:
+                  value:
+                    type: about:blank
+                    title: Mídia acima do limite
+                    status: 413
+                    code: MEDIA_SIZE_LIMIT_EXCEEDED
+                    instance: /v1/transcription-uploads
+        '422':
+          description: Tipo de conteúdo não aceito ou duração declarada acima de 2 horas; nenhum envio é registrado.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                unsupportedFormat:
+                  value:
+                    type: about:blank
+                    title: Formato não suportado
+                    status: 422
+                    code: UNSUPPORTED_MEDIA_FORMAT
+                    instance: /v1/transcription-uploads
+                durationLimit:
+                  value:
+                    type: about:blank
+                    title: Duração acima do limite
+                    status: 422
+                    code: MEDIA_DURATION_LIMIT_EXCEEDED
+                    instance: /v1/transcription-uploads
+        '429':
+          description: Há envios pendentes demais para esta credencial.
+          headers:
+            Retry-After:
+              description: Segundos até uma nova tentativa fazer sentido.
+              schema:
+                type: integer
+                minimum: 1
+                examples:
+                  - 60
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                tooManyPending:
+                  value:
+                    type: about:blank
+                    title: Envios pendentes demais
+                    status: 429
+                    code: TOO_MANY_PENDING_UPLOADS
+                    instance: /v1/transcription-uploads
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /transcription-uploads/{uploadId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/UploadId'
+    post:
+      summary: Concluir o envio e criar o job
+      description: |
+        O cliente chama depois do PUT bem-sucedido. A API confere que o objeto
+        existe, que o tamanho e o SHA-256 batem com o declarado e que o início
+        do arquivo corresponde a um dos formatos aceitos. Se tudo confere, cria
+        o job no estado queued e responde 202 sem esperar o processamento. O
+        job segue o fluxo de CAP-001 (queued, processing, completed ou failed),
+        com o mesmo resultado e a mesma retenção. Duração acima de 2 horas ou
+        conteúdo que o motor não decodifica só são detectados no processamento e
+        terminam o job em failed com MEDIA_DURATION_LIMIT_EXCEEDED ou
+        UNSUPPORTED_MEDIA_FORMAT.
+
+        A operação é idempotente por uploadId: repetir a chamada de um envio já
+        concluído devolve o mesmo job, também com 202. Envio de outra conta ou
+        credencial, ou expirado, responde 404 NOT_FOUND neutro.
+
+        Se o objeto ainda não chegou, responde 409 UPLOAD_NOT_RECEIVED e o envio
+        continua válido até expiresAt: o cliente repete o PUT e chama de novo. Se
+        o objeto existe mas não confere, o envio é recusado, o objeto é removido
+        e a resposta é 422; chamadas seguintes repetem o mesmo 422, e o cliente
+        recomeça com uma nova Idempotency-Key.
+
+        A mídia enviada segue a mesma retenção e o mesmo expurgo de CAP-001: sai
+        do armazenamento quando deixa de ser necessária e nunca aparece em logs
+        nem ao operador.
+      operationId: completeTranscriptionUpload
+      tags:
+        - Transcription uploads
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '202':
+          description: Job aceito; está em queued.
+          headers:
+            Location:
+              description: Referência do recurso para acompanhar o job.
+              schema:
+                type: string
+                format: uri-reference
+                examples:
+                  - /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTranscriptionResponse'
+              examples:
+                accepted:
+                  value:
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    status: queued
+                    createdAt: '2026-10-21T14:35:00Z'
+                    statusUrl: /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    clientReference: rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: O objeto ainda não foi recebido pelo armazenamento.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                notReceived:
+                  value:
+                    type: about:blank
+                    title: Arquivo ainda não recebido
+                    status: 409
+                    code: UPLOAD_NOT_RECEIVED
+                    instance: /v1/transcription-uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC/complete
+        '422':
+          description: O arquivo recebido não confere com o declarado; o envio foi recusado e o objeto removido.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                sizeMismatch:
+                  value:
+                    type: about:blank
+                    title: Tamanho diferente do declarado
+                    status: 422
+                    code: UPLOAD_SIZE_MISMATCH
+                    instance: /v1/transcription-uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC/complete
+                checksumMismatch:
+                  value:
+                    type: about:blank
+                    title: Conteúdo diferente do declarado
+                    status: 422
+                    code: UPLOAD_CHECKSUM_MISMATCH
+                    instance: /v1/transcription-uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC/complete
+                unsupportedFormat:
+                  value:
+                    type: about:blank
+                    title: Formato não suportado
+                    status: 422
+                    code: UNSUPPORTED_MEDIA_FORMAT
+                    instance: /v1/transcription-uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC/complete
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /transcriptions/{jobId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      summary: Consultar estado do job
+      description: |
+        Inalterado em relação à versão 1.0.0. Retorna o estado público atual e
+        os horários disponíveis. Jobs de outra conta, de outra credencial ou
+        expirados respondem 404 NOT_FOUND sem revelar estado ou conteúdo. Um job
+        terminal permanece consultável por até 24 horas a partir de terminalAt.
+        Um job criado por envio direto nunca passa por downloading.
+      operationId: getTranscription
+      tags:
+        - Transcriptions
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Estado do job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptionJob'
+              examples:
+                processing:
+                  value:
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    status: processing
+                    createdAt: '2026-10-21T14:35:00Z'
+                    updatedAt: '2026-10-21T14:36:12Z'
+                    clientReference: rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                failed:
+                  value:
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    status: failed
+                    createdAt: '2026-10-21T14:35:00Z'
+                    updatedAt: '2026-10-21T14:37:02Z'
+                    terminalAt: '2026-10-21T14:37:02Z'
+                    failure:
+                      code: MEDIA_DURATION_LIMIT_EXCEEDED
+                      message: A duração do áudio excede o limite de 2 horas.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /transcriptions/{jobId}/result:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      summary: Buscar resultado da transcrição
+      description: |
+        Inalterado em relação à versão 1.0.0. Retorna o resultado JSON
+        versionado somente quando o job está completed e dentro da retenção de
+        24 horas após o estado terminal. Enquanto o job não estiver concluído ou
+        se tiver terminado em failed, retorna 409 RESULT_NOT_AVAILABLE; não há
+        resultado parcial. Após a expiração, responde 404 NOT_FOUND.
+      operationId: getTranscriptionResult
+      tags:
+        - Transcriptions
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Resultado completo da transcrição.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptionResult'
+              examples:
+                result:
+                  value:
+                    schemaVersion: 1
+                    jobId: trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+                    language: pt-BR
+                    durationMs: 3600000
+                    segments:
+                      - startMs: 1240
+                        endMs: 4100
+                        text: Exemplo de transcrição.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: O job ainda não concluiu com sucesso ou terminou em falha.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                resultNotAvailable:
+                  value:
+                    type: about:blank
+                    title: Resultado indisponível
+                    status: 409
+                    code: RESULT_NOT_AVAILABLE
+                    instance: /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC/result
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API Key vinculada a uma conta, como na versão 1.0.0. Cria envios e lê
+        somente os envios e jobs criados pela própria credencial; recurso de
+        outra conta ou credencial, ou expirado, responde 404 NOT_FOUND neutro. A
+        URL de envio devolvida por createTranscriptionUpload não usa a API Key:
+        a própria URL assinada autoriza o PUT.
+
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      description: Identificador opaco do job.
+      schema:
+        type: string
+        minLength: 1
+        examples:
+          - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+    UploadId:
+      name: uploadId
+      in: path
+      required: true
+      description: Identificador opaco do envio.
+      schema:
+        type: string
+        minLength: 1
+        examples:
+          - upl_01J9M2YB8K4W6N7P3Q5R1S0ABC
+
+  responses:
+    Unauthorized:
+      description: API Key ausente, inválida ou revogada.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            unauthorized:
+              value:
+                type: about:blank
+                title: Autenticação necessária
+                status: 401
+                code: UNAUTHORIZED
+    Forbidden:
+      description: API Key ativa, mas sem escopo para a operação.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            forbidden:
+              value:
+                type: about:blank
+                title: Permissão insuficiente
+                status: 403
+                code: FORBIDDEN
+    NotFound:
+      description: Recurso inexistente, expirado ou pertencente a outra conta ou credencial.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            notFound:
+              value:
+                type: about:blank
+                title: Recurso não encontrado
+                status: 404
+                code: NOT_FOUND
+    InternalServerError:
+      description: Falha inesperada; detalhes internos não são expostos.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            internalError:
+              value:
+                type: about:blank
+                title: Erro interno
+                status: 500
+                code: INTERNAL_ERROR
+
+  schemas:
+    ContentType:
+      type: string
+      enum:
+        - audio/wav
+        - audio/mpeg
+        - audio/mp4
+        - video/mp4
+        - video/webm
+        - video/x-matroska
+      description: >-
+        Tipos de conteúdo aceitos, equivalentes às extensões .wav, .mp3, .m4a,
+        .mp4, .webm e .mkv do contrato 1.0.0.
+      examples:
+        - audio/wav
+
+    CreateTranscriptionUploadRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - contentType
+        - sizeBytes
+        - checksumSha256
+      properties:
+        contentType:
+          $ref: '#/components/schemas/ContentType'
+        sizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 5368709120
+          description: Tamanho exato do arquivo em bytes; limite de 5 GiB.
+          examples:
+            - 230400000
+        checksumSha256:
+          type: string
+          minLength: 44
+          maxLength: 44
+          pattern: '^[A-Za-z0-9+/]{43}=$'
+          description: SHA-256 do arquivo em base64, que o armazenamento verifica no PUT.
+          examples:
+            - 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
+        durationMs:
+          type: integer
+          minimum: 1
+          description: >-
+            Duração em milissegundos, opcional. Valor acima de 7200000 (2 horas)
+            é recusado de imediato. A duração real é medida no processamento.
+          examples:
+            - 7200000
+        clientReference:
+          type: string
+          maxLength: 256
+          description: Referência opaca controlada pelo consumidor; o Whisper não interpreta seu significado.
+          examples:
+            - rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+
+    UploadTarget:
+      type: object
+      additionalProperties: false
+      required:
+        - method
+        - url
+        - headers
+      description: Destino do PUT no armazenamento do Whisper. A URL é um segredo temporário.
+      properties:
+        method:
+          type: string
+          const: PUT
+          description: Método HTTP do envio.
+          examples:
+            - PUT
+        url:
+          type: string
+          format: uri
+          description: URL HTTPS pré-assinada, válida para um único objeto até expiresAt. Não registrar em logs.
+          examples:
+            - https://storage.example.test/whisper-temporary/uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC?signature=not-a-real-signature
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            Cabeçalhos que o PUT deve enviar exatamente como devolvidos; fazem
+            parte da assinatura.
+          examples:
+            - Content-Type: audio/wav
+              Content-Length: '230400000'
+              x-amz-checksum-sha256: 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
+
+    TranscriptionUpload:
+      type: object
+      additionalProperties: false
+      required:
+        - uploadId
+        - expiresAt
+      properties:
+        uploadId:
+          type: string
+          description: Identificador opaco do envio.
+          examples:
+            - upl_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        expiresAt:
+          type: string
+          format: date-time
+          description: Instante em UTC até o qual a URL de envio, ou o envio pendente, é válido.
+          examples:
+            - '2026-10-21T15:30:00Z'
+        upload:
+          $ref: '#/components/schemas/UploadTarget'
+        completeUrl:
+          type: string
+          format: uri-reference
+          description: Caminho para concluir o envio depois do PUT. Presente junto de upload.
+          examples:
+            - /v1/transcription-uploads/upl_01J9M2YB8K4W6N7P3Q5R1S0ABC/complete
+        jobId:
+          type: string
+          description: Presente quando o envio já foi concluído; nesse caso não há upload nem completeUrl.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        clientReference:
+          type: string
+          description: Presente somente se enviado no pedido.
+          examples:
+            - rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+
+    CreateTranscriptionResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - jobId
+        - status
+        - createdAt
+        - statusUrl
+      properties:
+        jobId:
+          type: string
+          description: Identificador opaco do job.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        status:
+          $ref: '#/components/schemas/TranscriptionStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: Instante de criação em UTC.
+          examples:
+            - '2026-10-21T14:35:00Z'
+        statusUrl:
+          type: string
+          format: uri-reference
+          description: Caminho para consultar o estado do job.
+          examples:
+            - /v1/transcriptions/trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        clientReference:
+          type: string
+          description: Presente somente se enviado no pedido de envio.
+          examples:
+            - rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+
+    TranscriptionJob:
+      type: object
+      additionalProperties: false
+      required:
+        - jobId
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        jobId:
+          type: string
+          description: Identificador opaco do job.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        status:
+          $ref: '#/components/schemas/TranscriptionStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: Instante de criação em UTC.
+          examples:
+            - '2026-10-21T14:35:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          description: Instante da última atualização pública do job em UTC.
+          examples:
+            - '2026-10-21T14:36:12Z'
+        terminalAt:
+          type: string
+          format: date-time
+          description: Instante em que o job entrou em estado terminal; inicia a janela de retenção de até 24 horas.
+          examples:
+            - '2026-10-21T14:37:02Z'
+        clientReference:
+          type: string
+          description: Presente somente se enviado na criação.
+          examples:
+            - rec_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        failure:
+          $ref: '#/components/schemas/TranscriptionFailure'
+
+    TranscriptionStatus:
+      type: string
+      enum:
+        - downloading
+        - queued
+        - processing
+        - completed
+        - failed
+      description: Estados públicos do ciclo de vida, na ordem em que podem ocorrer. Envio direto começa em queued.
+      examples:
+        - queued
+
+    TranscriptionFailure:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      description: Resumo seguro; não contém URL assinada, credenciais ou detalhes internos do provedor.
+      properties:
+        code:
+          type: string
+          enum:
+            - SOURCE_UNAVAILABLE
+            - MEDIA_SIZE_LIMIT_EXCEEDED
+            - MEDIA_DURATION_LIMIT_EXCEEDED
+            - UNSUPPORTED_MEDIA_FORMAT
+            - TRANSCRIPTION_FAILED
+          description: Código estável para tratamento pelo consumidor.
+          examples:
+            - MEDIA_DURATION_LIMIT_EXCEEDED
+        message:
+          type: string
+          description: Resumo legível da falha sem dados secretos ou internos.
+          examples:
+            - A duração do áudio excede o limite de 2 horas.
+
+    TranscriptionResult:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - jobId
+        - language
+        - durationMs
+        - segments
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+          description: Versão do schema do resultado, independente do motor de transcrição.
+          examples:
+            - 1
+        jobId:
+          type: string
+          description: Identificador opaco do job que originou o resultado.
+          examples:
+            - trn_01J9M2YB8K4W6N7P3Q5R1S0ABC
+        language:
+          type: string
+          const: pt-BR
+          description: Idioma do resultado neste primeiro corte.
+          examples:
+            - pt-BR
+        durationMs:
+          type: integer
+          minimum: 0
+          description: Duração da mídia em milissegundos.
+          examples:
+            - 3600000
+        segments:
+          type: array
+          description: Segmentos com tempos relativos ao início da mídia.
+          items:
+            $ref: '#/components/schemas/TranscriptionSegment'
+
+    TranscriptionSegment:
+      type: object
+      additionalProperties: false
+      required:
+        - startMs
+        - endMs
+        - text
+      properties:
+        startMs:
+          type: integer
+          minimum: 0
+          description: Início do segmento em milissegundos desde o início da mídia.
+          examples:
+            - 1240
+        endMs:
+          type: integer
+          minimum: 0
+          description: Fim do segmento em milissegundos desde o início da mídia.
+          examples:
+            - 4100
+        text:
+          type: string
+          description: Texto transcrito no segmento.
+          examples:
+            - Exemplo de transcrição.
+
+    Problem:
+      type: object
+      additionalProperties: true
+      required:
+        - type
+        - title
+        - status
+      description: Erro no formato RFC 9457, com campos de extensão do contrato.
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Identificador do tipo de problema; about:blank usa o status HTTP como tipo.
+          examples:
+            - about:blank
+        title:
+          type: string
+          description: Resumo legível do problema.
+          examples:
+            - Recurso não encontrado
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+          description: Código HTTP desta resposta.
+          examples:
+            - 404
+        detail:
+          type: string
+          description: Explicação segura e específica para esta ocorrência.
+          examples:
+            - O recurso não está disponível.
+        instance:
+          type: string
+          format: uri-reference
+          description: Caminho da operação que gerou o problema.
+          examples:
+            - /v1/transcription-uploads
+        code:
+          type: string
+          description: Código estável para tratamento programático pelo consumidor.
+          examples:
+            - NOT_FOUND
+        traceId:
+          type: string
+          description: Identificador de correlação que não contém mídia, credenciais ou URL assinada.
+          examples:
+            - 00-9f2b5d6c4e7a8b90123456789abcdef0-0123456789abcdef-01

@@ -8,3 +8,4 @@ ADRs são numeradas globalmente neste repositório. A lista inclui decisões pro
 | ADR-002 | Assinatura de webhook no padrão Standard Webhooks | Accepted | API assíncrona de transcrição: assinatura e entrega terminal | [adr-002.md](adr-002.md) |
 | ADR-003 | Allowlist explícita de destinos privados confiáveis | Accepted | API assíncrona de transcrição: SSRF de `sourceUrl` e webhook | [adr-003.md](adr-003.md) |
 | ADR-004 | Sessão operacional distinta da API Key | Accepted | Console do operador: autenticação no mesmo host | [adr-004.md](adr-004.md) |
+| ADR-005 | Cliente desktop Windows em .NET e WPF, no repositório do Whisper | Accepted | Cliente desktop de CAP-004: plataforma, local do código e guardrails | [adr-005.md](adr-005.md) |

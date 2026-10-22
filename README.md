@@ -26,6 +26,104 @@ retomada do job; mantenha-a no `.env` e preserve-a junto aos backups do banco.
 
 Se o usuário do host não tiver UID/GID `1000`, ajuste `LOCAL_UID` e `LOCAL_GID` em `.env` para os valores de `id -u` e `id -g`. Isso permite que o container grave os artefatos com a propriedade correta.
 
+## Envio direto de áudio e operação do armazenamento
+
+`POST /v1/transcription-uploads` aceita API Key, `Idempotency-Key`, tipo,
+tamanho e SHA-256 em base64 conforme
+[`api-contract.yaml`](tasks/prd-gravador-de-reunioes-desktop/api-contract.yaml).
+Registra apenas o envio e devolve uma URL para `PUT`; nenhum job é criado nesse
+pedido. Envie exatamente os cabeçalhos devolvidos, incluindo `Content-Length`
+e `x-amz-checksum-sha256`. A mesma chave e os mesmos valores devolvem o mesmo
+envio por 24 h; repetir o pedido renova a URL enquanto o envio estiver pendente.
+Após o `PUT`, chame o `completeUrl` devolvido para criar o job em `queued`.
+
+Configure `S3_PUBLIC_ENDPOINT_URL` com o endereço do armazenamento acessível
+ao cliente (HTTPS em produção). No Compose o padrão é `http://127.0.0.1:9000`;
+em outro PC, configure um host que esse PC consiga acessar e ajuste a publicação
+da porta do MinIO. `S3_ENDPOINT_URL` continua sendo o endereço interno do servidor.
+Fora do Compose, sem endereço público explícito, o assinador usa `S3_ENDPOINT_URL`
+ou o endpoint AWS da região. Não reescreva o host de uma URL já assinada.
+
+`UPLOAD_URL_TTL_SECONDS` controla a validade da URL (padrão 3600 s; entre 1 e
+604800, limitada também ao prazo restante de 24 h do envio).
+`UPLOAD_PENDING_LIMIT` limita os envios pendentes por credencial (padrão 5).
+No limite, pedidos novos recebem `429` e `Retry-After: 60`; repetições de envios
+existentes continuam permitidas. URLs de envio são segredos temporários: não
+as persista nem as registre em logs, traces ou métricas.
+
+Os objetos ficam no mesmo bucket temporário, sob `uploads/`. Antes de operar
+envios em produção, configure e confira uma regra de ciclo de vida de **2 dias**
+nesse prefixo, independente do expurgo da aplicação. Por exemplo, com um alias
+`whisper` do `mc` já configurado pelo operador:
+
+```bash
+mc ilm rule add --prefix 'uploads/' --expire-days 2 "whisper/$S3_BUCKET"
+mc ilm rule ls "whisper/$S3_BUCKET"
+mc version info "whisper/$S3_BUCKET"
+mc admin bucket info "whisper/$S3_BUCKET"
+```
+
+Confirme a regra habilitada, prefixo `uploads/` e expiração em 2 dias, preservando
+as demais regras do bucket. Conforme ADR-001, versionamento deve permanecer
+desabilitado/suspenso e Object Lock ausente; a aplicação verifica esses dois
+últimos requisitos na inicialização. A política de `scripts/init_minio.sh` já
+permite `s3:PutObject` em `bucket/*`, incluindo o novo prefixo.
+O worker precisa também de `s3:ListBucketVersions` no bucket e
+`s3:DeleteObjectVersion` nos objetos para eliminar versões e marcadores de
+exclusão. A política local inclui essas permissões e as consultas de
+versionamento e Object Lock; reaplicá-la atualiza instalações existentes.
+
+O varredor do worker é a garantia principal: remove objetos abandonados ou
+recusados de `uploads/`, preserva envios pendentes durante 24 h desde o pedido
+e objetos referenciados por jobs. Remove também registros pendentes vencidos
+e recusados após 24 h da recusa. A regra de 2 dias é uma proteção independente
+para falhas do serviço; ela não substitui o expurgo da aplicação. Confira a
+regra e as políticas acima em cada ambiente antes do piloto (ADR-001).
+
+A idempotência de um envio concluído acompanha o job: até o expurgo, repetir
+o pedido devolve o mesmo envio/job. Ao remover o job, 24 h após o estado
+terminal, a cascata remove o envio e libera a chave para um novo pedido
+(`201`). Um envio pendente vencido já é inexistente para `complete` (`404`)
+e sua chave pode ser reutilizada, mesmo antes da próxima varredura.
+
+Para conferir a validação dos cabeçalhos assinados contra um MinIO local com
+bucket já criado (nunca use credenciais de produção):
+
+```bash
+S3_SMOKE_ENDPOINT=http://127.0.0.1:9000 .venv/bin/pytest -q -k cap4_presign_minio
+```
+
+O smoke usa `S3_SMOKE_BUCKET` (padrão `whisper-temporary`),
+`S3_SMOKE_ACCESS_KEY_ID` e `S3_SMOKE_SECRET_ACCESS_KEY` (padrões root locais
+do Compose). Sem `S3_SMOKE_ENDPOINT`, os dois testes ficam ignorados.
+
+## Cliente gravador Windows (.NET)
+
+A solução fica em [`clients/windows-recorder/`](clients/windows-recorder/README.md).
+Requer SDK .NET 10. Na raiz do repositório, no Linux ou Windows:
+
+```bash
+dotnet build clients/windows-recorder -warnaserror
+dotnet format clients/windows-recorder --verify-no-changes
+dotnet test --project clients/windows-recorder/tests/Core.Tests --minimum-expected-tests 1
+dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class Whisper.Recorder.Core.Tests.SmokeTests --minimum-expected-tests 1
+```
+
+O runner é Microsoft.Testing.Platform com xUnit. O último comando fixa a sintaxe
+de filtro por classe para as próximas tasks: substitua o nome completo da classe.
+Um filtro sem correspondência deve retornar exit diferente de zero.
+O build inclui núcleo e apresentação `net10.0`, host WPF e projeto de testes do
+host `net10.0-windows`, com `EnableWindowsTargeting`. A compilação XAML foi
+verificada no Linux; executar a interface e os testes do host exige Windows.
+No Windows, abra `clients/windows-recorder/Whisper.Recorder.slnx` ou execute:
+
+```powershell
+dotnet run --project clients/windows-recorder/src/Host
+```
+
+O host é apenas a estrutura inicial, sem comportamento de gravação nesta etapa.
+Consulte o README do cliente para regenerar a API, as convenções e as licenças.
+
 ## Preparar a imagem e os modelos
 
 Faça o build enquanto houver internet:

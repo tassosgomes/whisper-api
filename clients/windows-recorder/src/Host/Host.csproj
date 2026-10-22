@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>Whisper.Recorder.Host</RootNamespace>
+    <ApplicationIcon>../../assets/icon/icon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Mesmo arquivo do ícone do .exe, incluído como recurso WPF sem cópia (Link). -->
+    <Resource Include="../../assets/icon/icon.ico" Link="Assets/icon.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- WinForms entra só pelo NotifyIcon da bandeja; evita nomes ambíguos com o WPF. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Presentation/Presentation.csproj" />
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
+  </ItemGroup>
+</Project>

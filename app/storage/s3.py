@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+
+
+@dataclass(frozen=True)
+class UploadObject:
+    size_bytes: int
+    checksum_sha256: str | None
+    first_bytes: bytes
 
 
 class S3ObjectStore:
@@ -21,6 +29,7 @@ class S3ObjectStore:
         endpoint_url: str | None = None,
         access_key_id: str | None = None,
         secret_access_key: str | None = None,
+        public_endpoint_url: str | None = None,
     ) -> None:
         if not bucket:
             raise ValueError("S3_BUCKET precisa ser configurado.")
@@ -37,6 +46,50 @@ class S3ObjectStore:
                 retries={"max_attempts": 3, "mode": "standard"},
             ),
         )
+        # Signing uses the client-visible host, never the Docker service name.
+        self.public_client = boto3.session.Session().client(
+            "s3",
+            region_name=region,
+            endpoint_url=public_endpoint_url or endpoint_url or None,
+            aws_access_key_id=access_key_id or None,
+            aws_secret_access_key=secret_access_key or None,
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+
+    @staticmethod
+    def upload_key(upload_id: str, suffix: str) -> str:
+        return f"uploads/{upload_id}/source{suffix}"
+
+    def presign_upload(
+        self,
+        key: str,
+        *,
+        content_type: str,
+        size_bytes: int,
+        checksum_sha256: str,
+        expires_in: int,
+    ) -> dict:
+        url = self.public_client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": self.bucket,
+                "Key": key,
+                "ContentType": content_type,
+                "ContentLength": size_bytes,
+                "ChecksumSHA256": checksum_sha256,
+            },
+            ExpiresIn=expires_in,
+            HttpMethod="PUT",
+        )
+        return {
+            "method": "PUT",
+            "url": url,
+            "headers": {
+                "Content-Type": content_type,
+                "Content-Length": str(size_bytes),
+                "x-amz-checksum-sha256": checksum_sha256,
+            },
+        }
 
     @staticmethod
     def media_key(job_id: str, suffix: str = "") -> str:
@@ -60,6 +113,36 @@ class S3ObjectStore:
     def download_media(self, key: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         self.client.download_file(self.bucket, key, str(destination))
+
+    def inspect_upload(self, key: str) -> UploadObject | None:
+        """Read the stored checksum and a bounded container signature, not the media."""
+        try:
+            head = self.client.head_object(
+                Bucket=self.bucket, Key=key, ChecksumMode="ENABLED"
+            )
+            first_bytes = b""
+            if head["ContentLength"]:
+                response = self.client.get_object(
+                    Bucket=self.bucket,
+                    Key=key,
+                    Range="bytes=0-4095",
+                    IfMatch=head["ETag"],
+                )
+                try:
+                    first_bytes = response["Body"].read(4096)
+                finally:
+                    response["Body"].close()
+            return UploadObject(
+                head["ContentLength"], head.get("ChecksumSHA256"), first_bytes
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {
+                "404",
+                "NoSuchKey",
+                "NotFound",
+            }:
+                return None
+            raise
 
     def put_result(self, job_id: str, payload: bytes) -> str:
         key = self.result_key(job_id)
@@ -85,7 +168,7 @@ class S3ObjectStore:
         if targets:
             for index in range(0, len(targets), 1000):
                 chunk = targets[index : index + 1000]
-                self.client.delete_objects(
+                response = self.client.delete_objects(
                     Bucket=self.bucket,
                     Delete={
                         "Objects": [
@@ -95,6 +178,11 @@ class S3ObjectStore:
                         "Quiet": True,
                     },
                 )
+                if response.get("Errors"):
+                    # S3 can report per-object failures inside an HTTP 200.
+                    raise ClientError(
+                        {"Error": {"Code": "ObjectDeletionFailed"}}, "DeleteObjects"
+                    )
             return
         self.client.delete_object(Bucket=self.bucket, Key=key)
 
@@ -171,13 +259,21 @@ class S3ObjectStore:
             )
         return policy
 
-    def list_keys(self, prefix: str) -> Iterator[str]:
-        paginator = self.client.get_paginator("list_objects_v2")
+    def list_keys(
+        self, prefix: str, *, include_versions: bool = False
+    ) -> Iterator[str]:
+        """List unique keys, including hidden versions when requested."""
+        operation = "list_object_versions" if include_versions else "list_objects_v2"
+        fields = ("Versions", "DeleteMarkers") if include_versions else ("Contents",)
+        paginator = self.client.get_paginator(operation)
+        seen: set[str] = set()
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
-            for item in page.get("Contents", []):
-                key = item.get("Key")
-                if key is not None:
-                    yield key
+            for field in fields:
+                for item in page.get(field, []):
+                    key = item.get("Key")
+                    if key is not None and key not in seen:
+                        seen.add(key)
+                        yield key
 
     def get_bytes(self, key: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=key)

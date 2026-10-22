@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import socket
@@ -12,6 +13,7 @@ import ssl
 import subprocess
 import threading
 import time
+import wave
 from pathlib import Path
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +28,7 @@ from sqlalchemy import delete
 from sqlalchemy.engine import URL, make_url
 
 from app.access.models import Account, AdministrativeAudit, Credential
-from app.jobs.models import IdempotencyRecord, TranscriptionJob
+from app.jobs.models import IdempotencyRecord, TranscriptionJob, TranscriptionUpload
 from app.main import app
 
 
@@ -292,6 +294,9 @@ def all_roles_client(
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")
     monkeypatch.setenv("S3_ENDPOINT_URL", controlled_s3_endpoint)
+    monkeypatch.setenv("S3_PUBLIC_ENDPOINT_URL", controlled_s3_endpoint)
+    monkeypatch.setenv("UPLOAD_URL_TTL_SECONDS", "3600")
+    monkeypatch.setenv("UPLOAD_PENDING_LIMIT", "5")
     monkeypatch.setenv("S3_ACCESS_KEY_ID", "test-access-key")
     monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "test-secret-key")
     input_dir = tmp_path / "input"
@@ -308,13 +313,14 @@ def all_roles_client(
         yield test_client
         engine = test_client.app.state.database_engine
         with engine.begin() as connection:
+            connection.execute(delete(TranscriptionUpload))
             connection.execute(delete(IdempotencyRecord))
             connection.execute(delete(TranscriptionJob))
             connection.execute(delete(Credential))
             connection.execute(delete(AdministrativeAudit))
             connection.execute(delete(Account))
         store = test_client.app.state.object_store
-        for prefix in ("media/", "results/"):
+        for prefix in ("media/", "results/", "uploads/"):
             try:
                 response = store.client.list_objects_v2(
                     Bucket=store.bucket, Prefix=prefix
@@ -343,6 +349,9 @@ def client(
     monkeypatch.setenv("S3_BUCKET", TEST_S3_BUCKET)
     monkeypatch.setenv("S3_REGION", "us-east-1")
     monkeypatch.setenv("S3_ENDPOINT_URL", controlled_s3_endpoint)
+    monkeypatch.setenv("S3_PUBLIC_ENDPOINT_URL", controlled_s3_endpoint)
+    monkeypatch.setenv("UPLOAD_URL_TTL_SECONDS", "3600")
+    monkeypatch.setenv("UPLOAD_PENDING_LIMIT", "5")
     monkeypatch.setenv("S3_ACCESS_KEY_ID", "test-access-key")
     monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "test-secret-key")
     input_dir = tmp_path / "input"
@@ -359,13 +368,14 @@ def client(
         yield test_client
         engine = test_client.app.state.database_engine
         with engine.begin() as connection:
+            connection.execute(delete(TranscriptionUpload))
             connection.execute(delete(IdempotencyRecord))
             connection.execute(delete(TranscriptionJob))
             connection.execute(delete(Credential))
             connection.execute(delete(AdministrativeAudit))
             connection.execute(delete(Account))
         store = test_client.app.state.object_store
-        for prefix in ("media/", "results/"):
+        for prefix in ("media/", "results/", "uploads/"):
             try:
                 response = store.client.list_objects_v2(
                     Bucket=store.bucket, Prefix=prefix
@@ -374,6 +384,28 @@ def client(
                 continue
             for item in response.get("Contents", []):
                 store.delete(item["Key"])
+
+
+@pytest.fixture
+def upload_credential(client):
+    """A real credential with the app's isolated PostgreSQL and moto bucket."""
+    return client.app.state.credential_store.provision_account("CAP-4 uploads")
+
+
+@pytest.fixture
+def upload_wav():
+    """Produce real, decodable PCM WAVs, including compact long-duration media."""
+
+    def build(seconds=1, *, sample_rate=8000):
+        target = io.BytesIO()
+        with wave.open(target, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(1)
+            audio.setframerate(sample_rate)
+            audio.writeframes(b"\x80" * (seconds * sample_rate))
+        return target.getvalue()
+
+    return build
 
 
 class ControlledWebhookReceiver:

@@ -12,10 +12,10 @@ from uuid import uuid4
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.access.models import Account
-from app.jobs.models import IdempotencyRecord, TranscriptionJob
+from app.jobs.models import IdempotencyRecord, TranscriptionJob, TranscriptionUpload
 from app.jobs.retention import (
     TERMINAL_RETENTION,
     TERMINAL_STATUSES,
@@ -38,6 +38,30 @@ DOWNLOAD_CONNECT_CONCURRENCY = 2
 # Q-04 first retry window: the admission GET counts as attempt 1 of 3, so the
 # scheduled wait before worker attempt 2 uses full jitter 0-5 s.
 ADMISSION_RETRY_JITTER_SECONDS = 5.0
+
+
+def create_uploaded_job(
+    session: Session, upload: TranscriptionUpload, now: datetime
+) -> dict:
+    """Join direct-upload acceptance to the caller's locked upload transaction."""
+    job = TranscriptionJob(
+        id=f"trn_{uuid4().hex}",
+        account_id=upload.account_id,
+        credential_id=upload.credential_id,
+        status="queued",
+        media_object_key=upload.object_key,
+        client_reference=upload.client_reference,
+        created_at=now,
+        updated_at=now,
+        accepted_at=now,
+        queued_at=now,
+    )
+    session.add(job)
+    session.flush()
+    upload.job_id = job.id
+    upload.status = "completed"
+    upload.updated_at = now
+    return _public_job(job)
 
 
 class IdempotencyKeyReused(ValueError):

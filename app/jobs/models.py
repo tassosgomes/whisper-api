@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     LargeBinary,
     Boolean,
+    BigInteger,
     Integer,
     String,
     Text,
@@ -113,6 +114,58 @@ class IdempotencyRecord(Base):
         server_default=func.now(),
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TranscriptionUpload(Base):
+    """Upload reservation; signed URLs are deliberately never persisted."""
+
+    __tablename__ = "transcription_uploads"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "credential_id",
+            "idempotency_key_hash",
+            name="uq_upload_scope_key",
+        ),
+        Index("ix_upload_pending_scope", "credential_id", "status", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    account_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    credential_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("credentials.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(44), nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger)
+    client_reference: Mapped[str | None] = mapped_column(String(256))
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    job_id: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("transcription_jobs.id", ondelete="CASCADE")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=_utc_now,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now, onupdate=_utc_now
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class WebhookSecret(Base):

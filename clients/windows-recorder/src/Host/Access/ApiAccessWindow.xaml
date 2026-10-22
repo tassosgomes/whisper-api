@@ -1,0 +1,46 @@
+<ui:FluentWindow x:Class="Whisper.Recorder.Host.Access.ApiAccessWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="Configurações" Width="560" Height="520" MinWidth="460" MinHeight="460"
+                 Icon="pack://application:,,,/Host;component/Assets/icon.ico"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowStartupLocation="CenterOwner">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Grid.Row="0" Title="Configurações: acesso à API" ShowMaximize="False" ShowMinimize="False">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Host;component/Assets/icon.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24,8,24,24">
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="Acesso à API de transcrição" Margin="0,0,0,4" />
+                <TextBlock TextWrapping="Wrap" Opacity="0.8" Margin="0,0,0,16"
+                           Text="Você pode gravar sem configurar nada. O acesso só é necessário para enviar uma gravação." />
+
+                <TextBlock Text="Endereço da API" Margin="0,0,0,4" />
+                <ui:TextBox x:Name="AddressBox" PlaceholderText="https://api.exemplo.com" Margin="0,0,0,12"
+                            AutomationProperties.Name="Endereço da API" />
+
+                <TextBlock Text="API Key" Margin="0,0,0,4" />
+                <ui:PasswordBox x:Name="KeyBox" PlaceholderText="Cole a chave aqui" Margin="0,0,0,4"
+                                AutomationProperties.Name="API Key" />
+                <TextBlock x:Name="MaskedKeyText" Opacity="0.8" Margin="0,0,0,12"
+                           AutomationProperties.Name="Chave salva" />
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                    <ui:Button x:Name="SaveButton" Content="Validar e salvar" Appearance="Primary" Margin="0,0,8,0"
+                               Click="OnSave" />
+                    <ui:Button x:Name="RemoveButton" Content="Remover a chave" Click="OnRemove" />
+                </StackPanel>
+
+                <ui:InfoBar x:Name="StatusBar" IsClosable="False" IsOpen="True" Title="Acesso" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</ui:FluentWindow>

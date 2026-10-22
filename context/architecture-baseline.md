@@ -1,15 +1,15 @@
 ---
 tsg_artifact: architecture-baseline
 product: whisper
-version: 0.1
+version: 0.2
 status: approved
-updated: 2026-09-28
-sources: vision.md@0.1, context/domain-map.md@0.1
+updated: 2026-10-21
+sources: vision.md@0.2, context/domain-map.md@0.1
 ---
 
 # Baseline Arquitetural
 
-Este baseline estabelece regras estruturais para o Whisper com base na visão v0.1, no Domain Map v0.1, no PRD aprovado v1.0 e na prova de conceito local. A visão e o Domain Map foram formalizados nesta passada e permanecem em revisão; este baseline foi aprovado pelo usuário em 2026-09-28.
+Este baseline estabelece regras estruturais para o Whisper com base na visão v0.1, no Domain Map v0.1, no PRD aprovado v1.0 e na prova de conceito local. A visão e o Domain Map foram formalizados nesta passada e permanecem em revisão; este baseline foi aprovado pelo usuário em 2026-09-28. A versão 0.2 (2026-10-21) acrescenta o envio direto de áudio por URL pré-assinada e a seção de clientes do Whisper, a partir do PRD de CAP-004 e da ADR-005.
 
 ## Estilo Arquitetural
 
@@ -37,6 +37,7 @@ O runtime permanece Python/FastAPI, conforme a aplicação atual. PostgreSQL é 
 - O cliente é dono da mídia original e de qualquer cópia permanente do resultado que decidir guardar. Whisper recebe apenas a autorização de acesso necessária à origem e não precisa de credenciais do armazenamento do cliente.
 - Cada conjunto de dados tem um domínio proprietário. Módulos podem compartilhar uma instância de banco no grupo inicial, mas um módulo não lê nem altera tabelas do outro diretamente. Compartilhamento ocorre por interface, evento ou projeção explicitamente descartável.
 - O estado durável do job é a fonte de verdade para seu ciclo de vida. O agendamento do trabalho não pode depender apenas de memória volátil. Uma tabela de trabalho no mesmo banco é adequada inicialmente se permitir gravação transacional, reivindicação exclusiva, lease, tentativas e recuperação após reinício; introduzir broker próprio exige necessidade medida de vazão, fan-out ou isolamento operacional.
+- Quando o cliente envia o arquivo direto, o Whisper é dono do objeto desde o pedido de envio. A API emite uma URL de envio pré-assinada de curta duração, restrita a um objeto, ao método PUT, ao tipo e ao tamanho declarados, e não recebe os bytes. Envio iniciado e não concluído é expurgado como órfão. O envio e o job pertencem à conta e à credencial que os criaram.
 - Mídia e resultado ficam em armazenamento privado sob responsabilidade do Whisper, separado do banco de metadados. A mídia pode ser removida assim que o processamento terminar e deve ser expurgada até o limite de retenção terminal definido no PRD; resultado e metadados ficam disponíveis por até 24 horas após `completed` ou `failed`.
 - O backend físico do armazenamento temporário e as garantias de backup/expurgo precisam ser decididos antes do desenho operacional. O bucket do consumidor não é reutilizado por inferência.
 
@@ -75,6 +76,19 @@ O runtime permanece Python/FastAPI, conforme a aplicação atual. PostgreSQL é 
 - Aumentar a quantidade de réplicas ou introduzir infraestrutura distribuída somente quando métricas mostrarem que o grupo inicial não atende os limites acordados. Não fixar capacidade por suposição nem replicar estado volátil como estratégia de escala.
 - Os componentes devem ser stateless quando apropriado; estado de job, leases, idempotência e notificações permanecem duráveis e compartilhados por interfaces de propriedade.
 
+## Clientes do Whisper
+
+O Whisper tem um cliente próprio, o gravador de reuniões para Windows (CAP-004, ADR-005). Ele não é um domínio nem uma unidade de deploy do serviço: é um consumidor externo da API pública, sob a mesma propriedade de produto. As regras abaixo valem para este e para outros clientes próprios que surgirem.
+
+- O cliente consome só o contrato público versionado (`/v1`). Não importa código do serviço, nem acessa seu banco, fila ou credenciais de armazenamento. O código de API do cliente é gerado do OpenAPI.
+- O cliente é dono dos dados que guarda no dispositivo do usuário (gravação e transcrição). O Whisper não os lê, não os sincroniza e não depende deles. Expirar no serviço não apaga a cópia local.
+- A API Key é segredo do usuário no dispositivo: guardada no cofre de credenciais do sistema, mascarada na interface e nunca registrada. O cliente não embute credencial.
+- Nenhum conteúdo sai do dispositivo sem ação explícita do usuário. Diagnóstico local não registra áudio, texto nem segredo.
+- A URL de envio é segredo temporário. O cliente não a registra nem a persiste além do envio em curso.
+- O cliente trata falha de rede e do serviço como estado normal: preserva o que gravou, repete com a mesma `Idempotency-Key` e recua diante de erro. Não depende de webhook.
+- O cliente tolera versões de `schemaVersion` desconhecidas sem perder dados e informa que precisa ser atualizado.
+- Plataforma, local do código e stack de um cliente são decididos por ADR. O cliente desktop usa .NET e WPF, no diretório `clients/` deste repositório.
+
 ## Guardrails Arquiteturais
 
 - Fronteiras de Acesso e Contas, Transcrição e Jobs e Entrega de Notificações seguem o Domain Map. Não criar um serviço ou domínio por operação técnica sem uma regra de negócio independente.
@@ -85,4 +99,5 @@ O runtime permanece Python/FastAPI, conforme a aplicação atual. PostgreSQL é 
 - Contratos públicos são versionados e independentes do motor de transcrição. Integração externa sempre passa por adaptador e nunca propaga identificadores, erros ou tipos de fornecedores diretamente.
 - Extração de um domínio para unidade de deploy própria requer evidência de necessidade e ADR aprovada; mudança de escala prevista não basta sem medição ou requisito operacional concreto.
 - O índice de ADR deste repositório é compartilhado entre features. A ADR-001 e a ADR-002 aceitas registram decisões específicas da API assíncrona de transcrição e não substituem este baseline.
+- Cliente próprio não vira domínio nem serviço do Whisper. Regras de gravação e de guarda local pertencem ao cliente, e o serviço continua sem conhecer conceitos do cliente.
 - O primeiro consumidor ainda depende de uma forma autorizada de obter URL de leitura da mídia; o contrato consultado do code-for-coders documenta URLs de escrita. Resolver essa integração antes de fechar a TechSpec ponta a ponta.

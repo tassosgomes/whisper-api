@@ -1,0 +1,11 @@
+# Testes do host
+
+Testes do host Windows (`net10.0-windows`), executados somente no Windows. As classes `V04*` cobrem a
+captura WASAPI com fontes sintéticas, os indicadores, o atalho global e a confirmação ao fechar.
+As classes `V05*` usam o Credential Manager real do usuário com alvos próprios de teste, removidos ao fim de cada teste.
+Não dependem de hardware nem de interação; o que usa WPF roda em thread STA explícita.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --minimum-expected-tests 1
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V04*" --minimum-expected-tests 6
+```
