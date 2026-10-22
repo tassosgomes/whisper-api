@@ -75,6 +75,21 @@ public sealed class V08TranscriptTests
     }
 
     [Fact]
+    public void FailedOverwriteKeepsTheOriginalFileAndLeavesNoTemporary()
+    {
+        using var rig = new LocalRig();
+        rig.Open();
+        var destination = Path.Combine(rig.Root, "ata.txt");
+        File.WriteAllText(destination, "anotações existentes");
+        // Outro programa mantém o destino aberto: a troca falha, mas o conteúdo anterior continua inteiro.
+        using (new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.None))
+            Assert.Equal(TranscriptExportOutcome.StorageError, rig.ViewModel.Export(destination, overwriteConfirmed: true));
+        Assert.Equal("anotações existentes", File.ReadAllText(destination));
+        Assert.Equal(new[] { destination }, Directory.EnumerateFiles(rig.Root, "ata*"));
+        Assert.StartsWith("Não foi possível exportar", rig.ViewModel.Message);
+    }
+
+    [Fact]
     public void FileCreatedAfterOpeningStillRequiresOverwriteConfirmation()
     {
         using var rig = new LocalRig();

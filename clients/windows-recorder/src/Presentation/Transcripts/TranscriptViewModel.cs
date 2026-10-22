@@ -9,6 +9,8 @@ namespace Whisper.Recorder.Presentation.Transcripts;
 public sealed class TranscriptViewModel(LocalTranscriptStore store) : INotifyPropertyChanged
 {
     private LocalTranscript? transcript;
+    // Only the latest Open/OpenAsync may publish its result: a slow read must not replace a newer choice.
+    private int generation;
     public event PropertyChangedEventHandler? PropertyChanged;
     public RecordingMetadata? Recording { get; private set; }
     public IReadOnlyList<TranscriptSegment> Segments => transcript?.Segments ?? Array.Empty<TranscriptSegment>();
@@ -21,20 +23,35 @@ public sealed class TranscriptViewModel(LocalTranscriptStore store) : INotifyPro
 
     public void Open(Guid recordingId)
     {
-        transcript = null;
-        Recording = null;
-        ExportOutcome = null;
+        generation++;
+        Reset();
         try
         {
-            transcript = store.Read(recordingId);
-            Recording = transcript.Recording;
-            Message = UpdateRequired ? "Atualize o app para ler esta versão da transcrição. A gravação está no PC."
-                : IsEmpty ? "Nenhuma fala foi reconhecida." : "Transcrição guardada no PC.";
+            Apply(store.Read(recordingId));
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or JsonException
-            or InvalidOperationException or KeyNotFoundException or FormatException)
+        catch (Exception error) when (IsReadFailure(error))
         {
-            Message = "Não foi possível ler a transcrição local. Confira os arquivos no PC.";
+            Fail();
+        }
+        Notify();
+    }
+
+    /// <summary>Reads the files outside the calling (UI) thread; the state is published on the caller's context.</summary>
+    public async Task OpenAsync(Guid recordingId, CancellationToken cancellationToken = default)
+    {
+        var current = ++generation;
+        Reset();
+        Notify();
+        try
+        {
+            var read = await Task.Run(() => store.Read(recordingId), cancellationToken);
+            if (current != generation) return;
+            Apply(read);
+        }
+        catch (Exception error) when (IsReadFailure(error))
+        {
+            if (current != generation) return;
+            Fail();
         }
         Notify();
     }
@@ -44,6 +61,21 @@ public sealed class TranscriptViewModel(LocalTranscriptStore store) : INotifyPro
     public TranscriptExportOutcome Export(string path, bool overwriteConfirmed = false)
     {
         var result = transcript is null ? TranscriptExportOutcome.Unavailable : store.Export(transcript, path, overwriteConfirmed);
+        return Report(result);
+    }
+
+    /// <summary>Writes the file outside the calling (UI) thread: the destination can be a slow network folder.</summary>
+    public async Task<TranscriptExportOutcome> ExportAsync(string path, bool overwriteConfirmed = false)
+    {
+        var current = transcript;
+        var result = current is null
+            ? TranscriptExportOutcome.Unavailable
+            : await Task.Run(() => store.Export(current, path, overwriteConfirmed));
+        return Report(result);
+    }
+
+    private TranscriptExportOutcome Report(TranscriptExportOutcome result)
+    {
         ExportOutcome = result;
         Message = result switch
         {
@@ -56,6 +88,26 @@ public sealed class TranscriptViewModel(LocalTranscriptStore store) : INotifyPro
         Notify();
         return result;
     }
+
+    private void Reset()
+    {
+        transcript = null;
+        Recording = null;
+        ExportOutcome = null;
+    }
+
+    private void Apply(LocalTranscript read)
+    {
+        transcript = read;
+        Recording = read.Recording;
+        Message = UpdateRequired ? "Atualize o app para ler esta versão da transcrição. A gravação está no PC."
+            : IsEmpty ? "Nenhuma fala foi reconhecida." : "Transcrição guardada no PC.";
+    }
+
+    private void Fail() => Message = "Não foi possível ler a transcrição local. Confira os arquivos no PC.";
+
+    private static bool IsReadFailure(Exception error) => error is IOException or InvalidDataException or UnauthorizedAccessException
+        or JsonException or InvalidOperationException or KeyNotFoundException or FormatException;
 
     private void Notify() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
 }

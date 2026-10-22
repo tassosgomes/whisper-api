@@ -396,7 +396,7 @@ caminho; somente após o aceite chama `Export(path, overwriteConfirmed: true)`.
 Sem aceite, o arquivo existente permanece intacto. `StorageError` fornece uma
 mensagem fixa sem conteúdo nem detalhes do caminho. As operações da ViewModel
 são síncronas e notificam `PropertyChanged` na thread do chamador.
-A tela, os diálogos e a área de transferência reais pertencem à task 14.0.
+A tela, os diálogos e a área de transferência reais estão no host (14.0, abaixo).
 
 ```bash
 dotnet test --project clients/windows-recorder/tests/Core.Tests --filter-class "*V08*" --minimum-expected-tests 8
@@ -527,3 +527,37 @@ dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "
 ```
 
 Validação manual: `tasks/prd-gravador-de-reunioes-desktop/12.0_manual_validation.md`.
+
+### Host: tela de transcrição (14.0)
+
+A tela é a janela `TranscriptWindow` (host), ligada ao `TranscriptScreenViewModel` (Presentation, sem tipos WPF), que
+envolve o `TranscriptViewModel` da 13.0. Lê só os arquivos locais (`result-v1.json` e `transcription.txt`): não recebe
+configuração, cofre nem cliente da API, então abre com o serviço desligado, sem rede e depois da retenção de 24 horas.
+
+- **Abrir:** o botão **Abrir transcrição** (ou Enter / duplo clique na linha) fica ativo para a gravação selecionada
+  com situação "Transcrita" (`UploadScreenViewModel.OpenTranscript` / `TranscriptRequested`). Tocar na notificação da
+  12.0 seleciona a gravação, e daí o mesmo botão leva à transcrição. A leitura roda fora da thread da interface
+  (`TranscriptViewModel.OpenAsync`); a tela mostra "Carregando a transcrição…" e só a leitura mais recente vale.
+- **Trechos:** uma lista com o tempo (`HH:mm:ss.fff`) e o texto de cada trecho; cada item tem nome de acessibilidade
+  ("tempo: texto"). Sem nenhuma fala, aparece a mensagem própria "Nenhuma fala foi reconhecida nesta gravação." e copiar
+  e exportar ficam desligados. Versão futura do resultado ou arquivo ilegível mostram um texto fixo, sem caminhos.
+- **Copiar:** `WindowsClipboard` (porta `ITranscriptClipboard`) usa `Clipboard.SetDataObject(texto, copy: true)` na thread
+  da interface. Se outro programa está com a área de transferência (`COMException`, em geral `CLIPBRD_E_CANT_OPEN`),
+  tenta 3 vezes com 100 ms de espera sem bloquear a tela; só então informa "Não foi possível copiar". O WPF também
+  tenta internamente, então, no pior caso, a interface pode ficar parada por alguns instantes enquanto outro programa
+  segura a área de transferência.
+- **Exportar:** `WindowsTranscriptDialogs` (porta `ITranscriptDialogs`) abre o `SaveFileDialog` do sistema (aviso nativo
+  de sobrescrita desligado) e, quando o núcleo responde `ConfirmationRequired`, pede **uma** confirmação própria
+  ("Substituir o arquivo?"); só então chama a exportação com `overwriteConfirmed: true`. Cancelar mantém o arquivo.
+  A gravação do arquivo também roda fora da thread da interface (`TranscriptViewModel.ExportAsync`).
+- **Teclado:** Ctrl+C copia com tempos, Ctrl+Shift+C copia sem tempos, Ctrl+S exporta, Esc fecha; os atalhos usam os
+  mesmos comandos dos botões. O foco vai para a lista de trechos (ou para **Fechar**, sem trechos) e o resultado de
+  cada ação fica numa região de leitura educada para leitores de tela.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V08*" --minimum-expected-tests 3
+```
+
+O teste com o clipboard real devolve o texto anterior da área de transferência e não toca em conteúdo que não seja
+texto; gerenciadores de histórico da área de transferência (Win+V) podem guardar o texto do teste.
+Validação manual: `tasks/prd-gravador-de-reunioes-desktop/14.0_manual_validation.md`.

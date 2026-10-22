@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Whisper.Recorder.Core.Recording;
+using Whisper.Recorder.Core.Storage;
 
 namespace Whisper.Recorder.Core.Transcripts;
 
@@ -54,18 +55,26 @@ public sealed class LocalTranscriptStore(RecordingRepository recordings)
             File.ReadAllText(Path.Combine(directory, "transcription.txt")));
     }
 
-    /// <summary>The host must confirm replacement of the selected path before passing overwriteConfirmed.</summary>
+    /// <summary>
+    /// The host must confirm replacement of the selected path before passing overwriteConfirmed. The text is fully written to a
+    /// temporary file beside the destination first, so a failure never truncates an existing file.
+    /// </summary>
     public TranscriptExportOutcome Export(LocalTranscript transcript, string path, bool overwriteConfirmed = false)
     {
         if (transcript.UpdateRequired) return TranscriptExportOutcome.Unavailable;
+        string? temporary = null;
         try
         {
-            // CreateNew also protects a file that appeared after the path was selected.
-            using var file = new FileStream(path, overwriteConfirmed ? FileMode.Create : FileMode.CreateNew,
-                FileAccess.Write, FileShare.None);
-            var bytes = Encoding.UTF8.GetBytes(transcript.CopyText(includeTimestamps: true));
-            file.Write(bytes);
-            file.Flush(true);
+            var full = Path.GetFullPath(path);
+            temporary = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                file.Write(Encoding.UTF8.GetBytes(transcript.CopyText(includeTimestamps: true)));
+                file.Flush(true);
+            }
+            // Without confirmation the move refuses an existing destination, also one that appeared after the path was selected.
+            if (overwriteConfirmed) AtomicFile.Replace(temporary, full);
+            else File.Move(temporary, full, overwrite: false);
             return TranscriptExportOutcome.Saved;
         }
         catch (IOException) when (!overwriteConfirmed && File.Exists(path))
@@ -75,6 +84,14 @@ public sealed class LocalTranscriptStore(RecordingRepository recordings)
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return TranscriptExportOutcome.StorageError;
+        }
+        finally
+        {
+            if (temporary is not null)
+            {
+                try { File.Delete(temporary); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            }
         }
     }
 }

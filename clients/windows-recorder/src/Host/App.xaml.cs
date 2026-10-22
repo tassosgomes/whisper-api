@@ -6,13 +6,16 @@ using Whisper.Recorder.Core.Diagnostics;
 using Whisper.Recorder.Core.Ports;
 using Whisper.Recorder.Core.Recording;
 using Whisper.Recorder.Core.Tracking;
+using Whisper.Recorder.Core.Transcripts;
 using Whisper.Recorder.Core.Uploading;
 using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Audio;
 using Whisper.Recorder.Host.Shell;
+using Whisper.Recorder.Host.Transcripts;
 using Whisper.Recorder.Presentation.Access;
 using Whisper.Recorder.Presentation.Recording;
 using Whisper.Recorder.Presentation.Tracking;
+using Whisper.Recorder.Presentation.Transcripts;
 using Whisper.Recorder.Presentation.Uploading;
 using Wpf.Ui.Appearance;
 
@@ -32,6 +35,7 @@ public partial class App : Application
     private UploadTransport? uploadTransport;
     private UploadViewModel? uploadViewModel;
     private UploadScreenViewModel? uploadScreen;
+    private TranscriptScreenViewModel? transcriptScreen;
     private TrackingTransport? trackingTransport;
     private WindowsConnectivity? connectivity;
     private TrackingViewModel? tracking;
@@ -107,7 +111,11 @@ public partial class App : Application
         uploadViewModel = new UploadViewModel(new UploadCoordinator(repository, configuration, vault, uploadTransport, clock, diagnostic));
         uploadScreen = new UploadScreenViewModel(uploadViewModel, accessViewModel, screen);
 
-        window = new MainWindow(screen, accessViewModel, uploadScreen, CleanupAsync);
+        // Transcrição (14.0): lida só dos arquivos locais, com a área de transferência e os diálogos do Windows.
+        transcriptScreen = new TranscriptScreenViewModel(new TranscriptViewModel(new LocalTranscriptStore(repository)),
+            new WindowsClipboard(), new WindowsTranscriptDialogs(() => window?.ActiveTranscriptOwner));
+
+        window = new MainWindow(screen, accessViewModel, uploadScreen, transcriptScreen, CleanupAsync);
         // Sem acesso confirmado no primeiro envio, ou com a chave recusada (401), abre as configurações.
         accessViewModel.ConfigurationRequested += () => window.ShowSettings();
         uploadScreen.ConfigurationRequested += () => window.ShowSettings();

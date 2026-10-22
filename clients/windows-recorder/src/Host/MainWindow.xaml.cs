@@ -3,8 +3,10 @@ using System.Windows;
 using System.Windows.Interop;
 using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Shell;
+using Whisper.Recorder.Host.Transcripts;
 using Whisper.Recorder.Presentation.Access;
 using Whisper.Recorder.Presentation.Recording;
+using Whisper.Recorder.Presentation.Transcripts;
 using Whisper.Recorder.Presentation.Uploading;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
@@ -17,16 +19,20 @@ public partial class MainWindow : FluentWindow
     private readonly ApiAccessViewModel access;
     private readonly UploadScreenViewModel upload;
     private ApiAccessWindow? settings;
+    private readonly TranscriptScreenViewModel transcripts;
+    private TranscriptWindow? transcriptWindow;
     private readonly ShutdownGuard guard;
     private GlobalHotkey? hotkey;
     private readonly Func<Task> cleanup;
     private bool allowClose;
 
-    public MainWindow(RecordingScreenViewModel screen, ApiAccessViewModel access, UploadScreenViewModel upload, Func<Task> cleanup)
+    public MainWindow(RecordingScreenViewModel screen, ApiAccessViewModel access, UploadScreenViewModel upload,
+        TranscriptScreenViewModel transcripts, Func<Task> cleanup)
     {
         this.screen = screen;
         this.access = access;
         this.upload = upload;
+        this.transcripts = transcripts;
         this.cleanup = cleanup;
         InitializeComponent();
         DataContext = screen;
@@ -40,6 +46,7 @@ public partial class MainWindow : FluentWindow
         };
         // Toque na notificação: a lista mostra a gravação escolhida pelo código.
         upload.SelectionRequested += _ => Dispatcher.BeginInvoke(RestoreSelection, System.Windows.Threading.DispatcherPriority.Background);
+        upload.TranscriptRequested += id => _ = ShowTranscriptAsync(id);
         guard = new ShutdownGuard(screen, ConfirmStopAndSaveAsync);
         Loaded += async (_, _) =>
         {
@@ -85,6 +92,34 @@ public partial class MainWindow : FluentWindow
     }
 
     private void OnOpenSettings(object sender, RoutedEventArgs e) => ShowSettings();
+
+    /// <summary>Janela dona dos diálogos de arquivo e confirmação da transcrição: a própria tela de leitura, se aberta.</summary>
+    public System.Windows.Window ActiveTranscriptOwner => transcriptWindow is { } open ? open : this;
+
+    /// <summary>Abre (ou reaproveita) a tela de transcrição; a leitura dos arquivos locais acontece fora da thread da interface.</summary>
+    private async Task ShowTranscriptAsync(Guid id)
+    {
+        if (transcriptWindow is null)
+        {
+            transcriptWindow = new TranscriptWindow(transcripts) { Owner = this };
+            transcriptWindow.Closed += (_, _) => transcriptWindow = null;
+        }
+        transcriptWindow.Show();
+        transcriptWindow.Activate();
+        await transcripts.OpenAsync(id);
+    }
+
+    /// <summary>Enter ou duplo clique na gravação transcrita abre a transcrição; nas demais, não faz nada.</summary>
+    private void OnRecordingActivated(object sender, System.Windows.Input.InputEventArgs e)
+    {
+        if (e is System.Windows.Input.KeyEventArgs { Key: not System.Windows.Input.Key.Enter })
+            return;
+        if (upload.OpenTranscript.CanExecute(null))
+        {
+            upload.OpenTranscript.Execute(null);
+            e.Handled = true;
+        }
+    }
 
     private void OnRecordingSelected(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {

@@ -18,3 +18,12 @@ controlados e uma thread de interface própria; não tocam a rede, o Credential 
 ```powershell
 dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V07*" --minimum-expected-tests 3
 ```
+
+As classes `V08*` cobrem a tela de transcrição: leitura dos arquivos locais com o serviço indisponível, cópia com e sem
+tempos (dublê da porta e o clipboard real do Windows em thread STA, que restaura o texto anterior), nova tentativa
+quando a área de transferência está ocupada, exportação com confirmação de sobrescrita (dublê de diálogo), transcrição
+vazia e o caminho da notificação até a transcrição. Não tocam a rede, o Credential Manager nem a pasta real do app.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V08*" --minimum-expected-tests 3
+```

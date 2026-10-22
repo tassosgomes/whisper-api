@@ -50,6 +50,7 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
         Cancel = new RelayCommand(CancelOrClose, () => CanCancel);
         Dismiss = new RelayCommand(Close, () => CanDismiss);
         OpenSettings = new RelayCommand(() => ConfigurationRequested?.Invoke());
+        OpenTranscript = new RelayCommand(RequestTranscript, () => CanOpenTranscript);
         upload.PropertyChanged += OnUploadChanged;
         upload.RecordingChanged += OnRecordingChanged;
         upload.ConfigurationRequested += OnConfigurationRequested;
@@ -60,6 +61,8 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
     public event Action? ConfigurationRequested;
     /// <summary>A seleção foi pedida por código (toque na notificação): a lista da janela acompanha a escolha.</summary>
     public event Action<Guid>? SelectionRequested;
+    /// <summary>O usuário pediu a transcrição da gravação selecionada; o host abre a tela de leitura (arquivos locais).</summary>
+    public event Action<Guid>? TranscriptRequested;
 
     public AsyncRelayCommand Transcribe { get; }
     public AsyncRelayCommand Confirm { get; }
@@ -67,11 +70,14 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
     public RelayCommand Cancel { get; }
     public RelayCommand Dismiss { get; }
     public RelayCommand OpenSettings { get; }
+    public RelayCommand OpenTranscript { get; }
 
     public UploadPhase Phase => phase;
     public Guid? SelectedRecordingId => selectedId;
     public RecordingListItem? SelectedRecording => selectedId is { } id ? screen.Recordings.FirstOrDefault(r => r.Id == id) : null;
     public bool CanTranscribe => Phase == UploadPhase.Idle && !upload.IsSending && SelectedRecording is { CanTranscribe: true };
+    /// <summary>A transcrição é lida do PC: basta a gravação estar transcrita, com ou sem rede ou serviço.</summary>
+    public bool CanOpenTranscript => SelectedRecording?.State == Core.Recording.RecordingState.Transcribed;
     public string TranscribeText => SelectedRecording?.State == Core.Recording.RecordingState.Transcribed
         ? "Enviar de novo para transcrição" : "Transcrever";
     /// <summary>Mensagem curta junto ao botão Transcrever (ex.: configurar o acesso antes do primeiro envio).</summary>
@@ -206,6 +212,12 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
         Notify();
     }
 
+    private void RequestTranscript()
+    {
+        if (CanOpenTranscript && selectedId is { } id)
+            TranscriptRequested?.Invoke(id);
+    }
+
     public Task ConfirmAsync() => CanConfirm ? SendAsync() : Task.CompletedTask;
 
     public Task RetryAsync() => CanRetry ? SendAsync() : Task.CompletedTask;
@@ -293,6 +305,7 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
         foreach (var command in new[] { Transcribe, Confirm, Retry })
             command.RaiseCanExecuteChanged();
         Cancel.RaiseCanExecuteChanged();
+        OpenTranscript.RaiseCanExecuteChanged();
         Dismiss.RaiseCanExecuteChanged();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
     }

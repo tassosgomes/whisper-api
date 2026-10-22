@@ -1,0 +1,74 @@
+<ui:FluentWindow x:Class="Whisper.Recorder.Host.Transcripts.TranscriptWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="Transcrição" Width="760" Height="640" MinWidth="520" MinHeight="420"
+                 Icon="pack://application:,,,/Host;component/Assets/icon.ico"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Grid.Row="0" Title="Whisper: transcrição" ShowMinimize="False">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Host;component/Assets/icon.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+        <Grid Grid.Row="1" Margin="24,8,24,24">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" FontSize="16" FontWeight="SemiBold" Text="{Binding Title}" TextTrimming="CharacterEllipsis"
+                       AutomationProperties.Name="Título da gravação" />
+            <TextBlock Grid.Row="1" Opacity="0.8" Text="{Binding Details}" Margin="0,2,0,12" />
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,12">
+                <ui:Button Content="Copiar com tempos" Appearance="Primary" Command="{Binding CopyWithTimes}" Margin="0,0,8,0"
+                           ToolTip="Ctrl+C" AutomationProperties.Name="Copiar a transcrição com os tempos, atalho Ctrl+C" />
+                <ui:Button Content="Copiar sem tempos" Command="{Binding CopyWithoutTimes}" Margin="0,0,8,0"
+                           ToolTip="Ctrl+Shift+C" AutomationProperties.Name="Copiar a transcrição sem os tempos, atalho Ctrl+Shift+C" />
+                <ui:Button Content="Exportar…" Command="{Binding Export}" Margin="0,0,8,0"
+                           ToolTip="Ctrl+S" AutomationProperties.Name="Exportar a transcrição para um arquivo, atalho Ctrl+S" />
+                <ui:Button x:Name="CloseButton" Content="Fechar" Command="{Binding Close}"
+                           ToolTip="Esc" AutomationProperties.Name="Fechar a transcrição, atalho Esc" />
+            </StackPanel>
+            <TextBlock Grid.Row="3" Text="Nenhuma fala foi reconhecida nesta gravação." TextWrapping="Wrap" FontSize="14"
+                       Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}"
+                       AutomationProperties.Name="Transcrição vazia: nenhuma fala foi reconhecida nesta gravação" />
+            <ListBox Grid.Row="3" x:Name="SegmentList" ItemsSource="{Binding Lines}"
+                     Visibility="{Binding ShowsLines, Converter={StaticResource BoolToVisibility}}"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     AutomationProperties.Name="Trechos da transcrição">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding Time}" FontFamily="Consolas" Opacity="0.8" />
+                            <TextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock Grid.Row="4" Margin="0,12,0,0" TextWrapping="Wrap" Text="{Binding Status}"
+                       AutomationProperties.Name="Situação da transcrição"
+                       AutomationProperties.LiveSetting="Polite" />
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

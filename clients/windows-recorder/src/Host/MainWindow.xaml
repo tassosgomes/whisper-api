@@ -134,6 +134,7 @@
                            Visibility="{Binding EmptyListText, Converter={StaticResource NullToVisibility}}" />
                 <ListView x:Name="RecordingList" ItemsSource="{Binding Recordings}" MinHeight="140" MaxHeight="360"
                           SelectionMode="Single" SelectionChanged="OnRecordingSelected"
+                          KeyDown="OnRecordingActivated" MouseDoubleClick="OnRecordingActivated"
                           AutomationProperties.Name="Lista de gravações"
                           KeyboardNavigation.TabNavigation="Once">
                     <ListView.View>
@@ -171,8 +172,11 @@
                     <StackPanel Orientation="Horizontal">
                         <ui:Button Content="{Binding TranscribeText}" Appearance="Primary" Command="{Binding Transcribe}"
                                    AutomationProperties.Name="Enviar a gravação selecionada para transcrição" />
+                        <ui:Button Content="Abrir transcrição" Command="{Binding OpenTranscript}" Margin="8,0,0,0"
+                                   ToolTip="Lê a transcrição guardada no PC (Enter na gravação transcrita)"
+                                   AutomationProperties.Name="Abrir a transcrição da gravação selecionada" />
                         <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Opacity="0.8"
-                                   Text="Selecione uma gravação na lista para enviá-la." />
+                                   Text="Selecione uma gravação na lista para enviá-la ou, se já transcrita, para ler a transcrição." />
                     </StackPanel>
                     <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding Hint}"
                                Visibility="{Binding Hint, Converter={StaticResource NullToVisibility}}" />
