@@ -167,6 +167,24 @@
                     </ListView.View>
                 </ListView>
 
+                <!-- Gestão: reproduzir, renomear e apagar a gravação selecionada (comandos e atalhos do ViewModel) -->
+                <StackPanel x:Name="ManageArea" Margin="0,12,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button Content="▶ Reproduzir" Command="{Binding Play}" ToolTip="Ctrl+P"
+                                   AutomationProperties.Name="Reproduzir a gravação selecionada, atalho Ctrl+P" />
+                        <ui:Button Content="Renomear" Command="{Binding Rename}" Margin="8,0,0,0" ToolTip="F2 (com a lista em foco)"
+                                   AutomationProperties.Name="Renomear a gravação selecionada, atalho F2" />
+                        <ui:Button Content="Apagar" Command="{Binding Delete}" Margin="8,0,0,0" ToolTip="Delete (com a lista em foco)"
+                                   AutomationProperties.Name="Apagar a gravação selecionada do PC, atalho Delete" />
+                    </StackPanel>
+                    <TextBlock Margin="0,8,0,0" Opacity="0.8" TextWrapping="Wrap" Text="{Binding Hint}"
+                               Visibility="{Binding Hint, Converter={StaticResource NullToVisibility}}" />
+                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding Message}"
+                               Visibility="{Binding Message, Converter={StaticResource NullToVisibility}}"
+                               AutomationProperties.Name="Resultado da última ação sobre as gravações"
+                               AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+
                 <!-- Envio para transcrição: nada sai sem a confirmação explícita -->
                 <StackPanel x:Name="UploadArea" Margin="0,12,0,0">
                     <StackPanel Orientation="Horizontal">

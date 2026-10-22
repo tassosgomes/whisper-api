@@ -31,15 +31,17 @@ public sealed class TrackingRig : IAsyncDisposable
     private readonly RecordingSession session;
     private readonly RecordingViewModel recording;
     private readonly ApiAccessProbe probe;
-    private readonly UploadTransport uploadTransport = new();
+    private readonly UploadTransport uploadTransport;
     private readonly TrackingTransport trackingTransport;
     private readonly ApiAccessViewModel access;
     private readonly UploadViewModel upload;
     private int windowShown;
 
-    private TrackingRig(string directory, bool keepDirectory, DateTimeOffset now, UiThread ui)
+    private TrackingRig(string directory, bool keepDirectory, DateTimeOffset now, UiThread ui, ICredentialVault? vault, HttpMessageHandler? uploadHandler)
     {
+        uploadTransport = uploadHandler is null ? new UploadTransport() : new UploadTransport(uploadHandler, uploadHandler);
         Directory = directory;
+        Vault = vault ?? new MemoryVault();
         this.keepDirectory = keepDirectory;
         Ui = ui;
         Clock.UtcNow = now;
@@ -56,13 +58,13 @@ public sealed class TrackingRig : IAsyncDisposable
         (recording, Screen, access, upload, Flow) = ui.InvokeAsync(() =>
         {
             var recordingViewModel = new RecordingViewModel(session, Repository);
-            var screen = new RecordingScreenViewModel(recordingViewModel, capture);
+            var screen = new RecordingScreenViewModel(recordingViewModel, capture, Gate);
             var accessViewModel = new ApiAccessViewModel(new ApiAccessService(Vault, Configuration, probe,
-                new DiagnosticLog(new StringWriter(), Clock)));
+                new DiagnosticLog(new StringWriter(), Clock)), Gate);
             var uploadViewModel = new UploadViewModel(new UploadCoordinator(Repository, Configuration, Vault, uploadTransport, Clock,
                 new DiagnosticLog(new StringWriter(), Clock)));
             return (recordingViewModel, screen, accessViewModel, uploadViewModel,
-                new UploadScreenViewModel(uploadViewModel, accessViewModel, screen));
+                new UploadScreenViewModel(uploadViewModel, accessViewModel, screen, Gate));
         }).GetAwaiter().GetResult();
         Tracker = new JobTracker(Repository, Configuration, Vault, trackingTransport, uploadTransport, Connectivity, Clock, Scheduler, Toast);
         Tracking = new TrackingViewModel(Tracker, Screen, Scheduler);
@@ -74,7 +76,10 @@ public sealed class TrackingRig : IAsyncDisposable
     public TestClock Clock { get; } = new();
     public RecordingRepository Repository { get; }
     public ApiConfigurationStore Configuration { get; }
-    public MemoryVault Vault { get; } = new();
+    public ApiAccessViewModel Access => access;
+    public ICredentialVault Vault { get; }
+    /// <summary>A mesma trava do host: a limpeza de dados desliga captura, envio e configuração enquanto roda.</summary>
+    public DataOperationGate Gate { get; } = new();
     public FakeTrackingApi Api { get; } = new();
     public ControlledConnectivity Connectivity { get; } = new();
     public ControlledScheduler Scheduler { get; } = new();
@@ -86,12 +91,13 @@ public sealed class TrackingRig : IAsyncDisposable
     public NotificationActivation Activation { get; }
     public int WindowShown => Volatile.Read(ref windowShown);
 
-    public static async Task<TrackingRig> CreateAsync(string? directory = null, bool keepDirectory = false, DateTimeOffset? now = null)
+    public static async Task<TrackingRig> CreateAsync(string? directory = null, bool keepDirectory = false, DateTimeOffset? now = null,
+        ICredentialVault? vault = null, HttpMessageHandler? uploadHandler = null)
     {
         var ui = new UiThread();
         await Task.Yield();
         return new TrackingRig(directory ?? Path.Combine(Path.GetTempPath(), "whisper-host-v07-" + Guid.NewGuid().ToString("N")),
-            keepDirectory, now ?? new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero), ui);
+            keepDirectory, now ?? new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero), ui, vault, uploadHandler);
     }
 
     /// <summary>Grava no disco uma gravação já enviada (em processamento) ou em outro estado.</summary>

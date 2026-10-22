@@ -10,9 +10,12 @@ using Whisper.Recorder.Core.Transcripts;
 using Whisper.Recorder.Core.Uploading;
 using Whisper.Recorder.Host.Access;
 using Whisper.Recorder.Host.Audio;
+using Whisper.Recorder.Host.Management;
+using Whisper.Recorder.Host.Playback;
 using Whisper.Recorder.Host.Shell;
 using Whisper.Recorder.Host.Transcripts;
 using Whisper.Recorder.Presentation.Access;
+using Whisper.Recorder.Presentation.Playback;
 using Whisper.Recorder.Presentation.Recording;
 using Whisper.Recorder.Presentation.Tracking;
 using Whisper.Recorder.Presentation.Transcripts;
@@ -23,7 +26,8 @@ namespace Whisper.Recorder.Host;
 
 public partial class App : Application
 {
-    private TextWriter diagnosticWriter = TextWriter.Null;
+    private ReleasableLogWriter? diary;
+    private string dataDirectory = "";
     private DiagnosticLog? diagnostic;
     private Mutex? singleInstance;
     private WasapiAudioCapture? capture;
@@ -36,6 +40,7 @@ public partial class App : Application
     private UploadViewModel? uploadViewModel;
     private UploadScreenViewModel? uploadScreen;
     private TranscriptScreenViewModel? transcriptScreen;
+    private RecordingManagementScreenViewModel? management;
     private TrackingTransport? trackingTransport;
     private WindowsConnectivity? connectivity;
     private TrackingViewModel? tracking;
@@ -56,12 +61,13 @@ public partial class App : Application
 
         try
         {
-            var directory = Path.Combine(
+            dataDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Whisper", "Recorder");
-            Directory.CreateDirectory(directory);
-            diagnosticWriter = new StreamWriter(Path.Combine(directory, "diagnostics.log"), append: true);
-            diagnostic = new DiagnosticLog(diagnosticWriter, new SystemClock());
+            Directory.CreateDirectory(dataDirectory);
+            // O diário abre sob demanda e pode ser solto: "apagar todos os dados" esvazia a pasta com o app aberto.
+            diary = new ReleasableLogWriter(Path.Combine(dataDirectory, "diagnostics.log"));
+            diagnostic = new DiagnosticLog(diary, new SystemClock());
             diagnostic.Write(DiagnosticEvent.ApplicationStarted);
         }
         catch (IOException)
@@ -83,7 +89,13 @@ public partial class App : Application
     private void Compose()
     {
         var clock = new SystemClock();
+        if (dataDirectory.Length == 0)
+            dataDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Whisper", "Recorder");
+        diary ??= new ReleasableLogWriter(Path.Combine(dataDirectory, "diagnostics.log"));
         var repository = new RecordingRepository();
+        // Trava única das operações sobre os dados locais (apagar uma gravação, apagar tudo).
+        var gate = new DataOperationGate();
         try
         {
             // Antes de criar a sessão: uma gravação que ficou em "recording" vira "interrompida".
@@ -97,25 +109,32 @@ public partial class App : Application
         capture = new WasapiAudioCapture(new NAudioCaptureDeviceCatalog(), clock, diagnostic: diagnostic);
         session = new RecordingSession(capture, clock, new SystemScheduler(), repository);
         recordingViewModel = new RecordingViewModel(session, repository);
-        screen = new RecordingScreenViewModel(recordingViewModel, capture);
+        screen = new RecordingScreenViewModel(recordingViewModel, capture, gate);
 
         // Configuração do acesso à API: opcional para gravar, pedida só no primeiro envio.
         var vault = new WindowsCredentialVault();
         var configuration = new ApiConfigurationStore(ApiConfigurationStore.DefaultPath);
         accessProbe = new ApiAccessProbe();
-        accessViewModel = new ApiAccessViewModel(new ApiAccessService(vault, configuration, accessProbe, diagnostic));
+        accessViewModel = new ApiAccessViewModel(new ApiAccessService(vault, configuration, accessProbe, diagnostic), gate);
 
         // Envio (10.0): HttpClient real com a validação de certificado do Windows, sem redirecionamento nem retry
         // automático. O coordenador é compartilhado com o repositório da sessão (exclusão mútua das operações).
         uploadTransport = new UploadTransport();
         uploadViewModel = new UploadViewModel(new UploadCoordinator(repository, configuration, vault, uploadTransport, clock, diagnostic));
-        uploadScreen = new UploadScreenViewModel(uploadViewModel, accessViewModel, screen);
+        uploadScreen = new UploadScreenViewModel(uploadViewModel, accessViewModel, screen, gate);
 
         // Transcrição (14.0): lida só dos arquivos locais, com a área de transferência e os diálogos do Windows.
         transcriptScreen = new TranscriptScreenViewModel(new TranscriptViewModel(new LocalTranscriptStore(repository)),
             new WindowsClipboard(), new WindowsTranscriptDialogs(() => window?.ActiveTranscriptOwner));
 
-        window = new MainWindow(screen, accessViewModel, uploadScreen, transcriptScreen, CleanupAsync);
+        // Gestão (16.0): player sobre o NAudio, renomear, apagar e apagar tudo. O núcleo decide; o host libera janelas e diário.
+        var player = new PlayerScreenViewModel(() => new NAudioAudioPlayer(), repository);
+        management = new RecordingManagementScreenViewModel(
+            new RecordingManagementViewModel(new RecordingManagement(repository, vault, dataDirectory)),
+            screen, uploadScreen, accessViewModel, new WindowsManagementDialogs(ActiveWindow),
+            new WindowsManagementHost(() => window, diary), gate, dataDirectory);
+
+        window = new MainWindow(screen, accessViewModel, uploadScreen, transcriptScreen, management, player, CleanupAsync);
         // Sem acesso confirmado no primeiro envio, ou com a chave recusada (401), abre as configurações.
         accessViewModel.ConfigurationRequested += () => window.ShowSettings();
         uploadScreen.ConfigurationRequested += () => window.ShowSettings();
@@ -142,6 +161,9 @@ public partial class App : Application
         uploadViewModel.RecordingChanged += tracking.Wake;
         tracking.Start();
     }
+
+    /// <summary>A janela ativa do app (principal, configurações...), dona dos diálogos de confirmação.</summary>
+    private Window? ActiveWindow() => Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? window;
 
     /// <summary>
     /// Logoff ou desligamento: salva a gravação em andamento sem diálogo. O Windows espera o handler
@@ -186,6 +208,7 @@ public partial class App : Application
             trackingTransport?.Dispose();
             if (screen is not null)
                 await screen.DisposeAsync().ConfigureAwait(false);
+            management?.Dispose();
             uploadScreen?.Dispose();
             uploadViewModel?.Dispose();
             uploadTransport?.Dispose();
@@ -220,7 +243,7 @@ public partial class App : Application
         }
         try
         {
-            diagnosticWriter.Dispose();
+            diary?.Dispose();
         }
         catch (IOException)
         {

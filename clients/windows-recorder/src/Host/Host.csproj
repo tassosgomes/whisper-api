@@ -21,5 +21,6 @@
     <ProjectReference Include="../Presentation/Presentation.csproj" />
     <PackageReference Include="WPF-UI" Version="4.3.0" />
     <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
+    <PackageReference Include="NAudio.WinMM" Version="3.3.0" />
   </ItemGroup>
 </Project>

@@ -2,7 +2,7 @@
                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-                 Title="Configurações" Width="560" Height="520" MinWidth="460" MinHeight="460"
+                 Title="Configurações" Width="560" Height="680" MinWidth="460" MinHeight="460"
                  Icon="pack://application:,,,/Host;component/Assets/icon.ico"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="Mica"
@@ -40,6 +40,15 @@
                 </StackPanel>
 
                 <ui:InfoBar x:Name="StatusBar" IsClosable="False" IsOpen="True" Title="Acesso" />
+
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="Dados no PC" Margin="0,24,0,4" />
+                <TextBlock x:Name="DataLocationText" TextWrapping="Wrap" Opacity="0.8" Margin="0,0,0,8"
+                           AutomationProperties.Name="Onde os dados do app ficam no PC" />
+                <ui:Button x:Name="DeleteAllButton" Content="Apagar todos os dados do app…" Click="OnDeleteAll"
+                           AutomationProperties.Name="Apagar todos os dados do app: gravações, transcrições, configurações, diário e a chave de acesso" />
+                <TextBlock x:Name="DataStatusText" TextWrapping="Wrap" Margin="0,8,0,0"
+                           AutomationProperties.Name="Situação da limpeza dos dados"
+                           AutomationProperties.LiveSetting="Polite" />
             </StackPanel>
         </ScrollViewer>
     </Grid>

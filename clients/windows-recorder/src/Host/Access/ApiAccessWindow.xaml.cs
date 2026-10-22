@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Whisper.Recorder.Core.Access;
 using Whisper.Recorder.Presentation.Access;
+using Whisper.Recorder.Presentation.Recording;
 using Wpf.Ui.Controls;
 
 namespace Whisper.Recorder.Host.Access;
@@ -13,15 +14,26 @@ namespace Whisper.Recorder.Host.Access;
 public partial class ApiAccessWindow : FluentWindow
 {
     private readonly ApiAccessViewModel access;
+    private readonly RecordingManagementScreenViewModel management;
+    private bool showDataResult;
     private bool busy;
 
-    public ApiAccessWindow(ApiAccessViewModel access)
+    public ApiAccessWindow(ApiAccessViewModel access, RecordingManagementScreenViewModel management)
     {
         this.access = access;
+        this.management = management;
         InitializeComponent();
         DataContext = access;
         access.PropertyChanged += OnAccessChanged;
-        Closed += (_, _) => access.PropertyChanged -= OnAccessChanged;
+        management.PropertyChanged += OnAccessChanged;
+        management.DataDeleted += OnDataDeleted;
+        DataLocationText.Text = management.DataLocationText;
+        Closed += (_, _) =>
+        {
+            access.PropertyChanged -= OnAccessChanged;
+            management.PropertyChanged -= OnAccessChanged;
+            management.DataDeleted -= OnDataDeleted;
+        };
         Loaded += async (_, _) =>
         {
             Refresh();
@@ -32,6 +44,21 @@ public partial class ApiAccessWindow : FluentWindow
     }
 
     private void OnAccessChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
+
+    /// <summary>Tudo foi apagado: endereço e chave digitados não podem sobreviver à limpeza.</summary>
+    private void OnDataDeleted()
+    {
+        AddressBox.Clear();
+        KeyBox.Clear();
+    }
+
+    private async void OnDeleteAll(object sender, System.Windows.RoutedEventArgs e)
+    {
+        // A confirmação e a ordem das etapas são do ViewModel; aqui só se mostra o resultado.
+        await management.DeleteAll.ExecuteAsync();
+        showDataResult = true;
+        Refresh();
+    }
 
     private async void OnSave(object sender, System.Windows.RoutedEventArgs e)
     {
@@ -64,8 +91,13 @@ public partial class ApiAccessWindow : FluentWindow
 
     private void Refresh()
     {
-        SaveButton.IsEnabled = !busy;
-        RemoveButton.IsEnabled = !busy && access.MaskedKey is not null;
+        // Durante a limpeza dos dados a chave não pode ser salva nem removida por aqui.
+        SaveButton.IsEnabled = !busy && !access.IsLocked;
+        RemoveButton.IsEnabled = !busy && !access.IsLocked && access.MaskedKey is not null;
+        DeleteAllButton.IsEnabled = management.CanDeleteAll;
+        DataStatusText.Text = management.IsBusy ? "Apagando os dados do app…"
+            : !management.CanDeleteAll ? management.Hint
+            : showDataResult ? management.Message : "";
         MaskedKeyText.Text = access.MaskedKey is { } masked ? "Chave salva: " + masked : "Nenhuma chave salva.";
         StatusBar.Message = busy ? "Verificando o acesso…" : access.Message;
         StatusBar.Severity = busy ? InfoBarSeverity.Informational : access.Status switch

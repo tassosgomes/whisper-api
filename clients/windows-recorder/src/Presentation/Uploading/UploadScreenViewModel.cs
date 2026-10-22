@@ -30,6 +30,7 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
     private readonly UploadViewModel upload;
     private readonly ApiAccessViewModel access;
     private readonly RecordingScreenViewModel screen;
+    private readonly DataOperationGate? gate;
     private CancellationTokenSource? cancellation;
     private Guid? selectedId;
     // A gravação do painel (confirmação, envio em curso e retry). A seleção da lista pode mudar sem redirecioná-los.
@@ -39,8 +40,10 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
     private string? notice;
     private bool existingConfirmed;
 
-    public UploadScreenViewModel(UploadViewModel upload, ApiAccessViewModel access, RecordingScreenViewModel screen)
+    public UploadScreenViewModel(UploadViewModel upload, ApiAccessViewModel access, RecordingScreenViewModel screen,
+        DataOperationGate? gate = null)
     {
+        this.gate = gate;
         this.upload = upload;
         this.access = access;
         this.screen = screen;
@@ -54,6 +57,8 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
         upload.PropertyChanged += OnUploadChanged;
         upload.RecordingChanged += OnRecordingChanged;
         upload.ConfigurationRequested += OnConfigurationRequested;
+        if (gate is not null)
+            gate.Changed += Notify;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -74,8 +79,10 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
 
     public UploadPhase Phase => phase;
     public Guid? SelectedRecordingId => selectedId;
+    /// <summary>Apagar dados do app em curso: nada novo é enviado até a operação terminar.</summary>
+    public bool DataOperationBusy => gate?.IsBusy == true;
     public RecordingListItem? SelectedRecording => selectedId is { } id ? screen.Recordings.FirstOrDefault(r => r.Id == id) : null;
-    public bool CanTranscribe => Phase == UploadPhase.Idle && !upload.IsSending && SelectedRecording is { CanTranscribe: true };
+    public bool CanTranscribe => !DataOperationBusy && Phase == UploadPhase.Idle && !upload.IsSending && SelectedRecording is { CanTranscribe: true };
     /// <summary>A transcrição é lida do PC: basta a gravação estar transcrita, com ou sem rede ou serviço.</summary>
     public bool CanOpenTranscript => SelectedRecording?.State == Core.Recording.RecordingState.Transcribed;
     public string TranscribeText => SelectedRecording?.State == Core.Recording.RecordingState.Transcribed
@@ -178,6 +185,28 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
             Notify();
         }
         SelectionRequested?.Invoke(id);
+    }
+
+    /// <summary>
+    /// A gravação foi (ou vai ser) apagada do PC: interrompe o envio local dela, fecha o painel e esquece a seleção.
+    /// Sem identificador, vale para todas (apagar tudo). O job já criado no serviço não é cancelado.
+    /// </summary>
+    public void ForgetRecording(Guid? id = null)
+    {
+        // O envio e o painel só são do alvo se for ele a gravação ativa (ou se for apagar tudo): a seleção de outra
+        // gravação, mesmo apagada, não pode cancelar o envio em curso de uma gravação diferente.
+        if (id is null || activeId == id)
+        {
+            if (Phase == UploadPhase.Sending)
+                cancellation?.Cancel();
+            phase = UploadPhase.Idle;
+            hint = null;
+            notice = null;
+            activeId = null;
+        }
+        if (id is null || selectedId == id)
+            selectedId = null;
+        Notify();
     }
 
     public async Task TranscribeAsync()
@@ -315,6 +344,8 @@ public sealed class UploadScreenViewModel : INotifyPropertyChanged, IDisposable
         upload.PropertyChanged -= OnUploadChanged;
         upload.RecordingChanged -= OnRecordingChanged;
         upload.ConfigurationRequested -= OnConfigurationRequested;
+        if (gate is not null)
+            gate.Changed -= Notify;
         cancellation?.Cancel();
     }
 }

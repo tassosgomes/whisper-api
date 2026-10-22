@@ -27,3 +27,13 @@ vazia e o caminho da notificação até a transcrição. Não tocam a rede, o Cr
 ```powershell
 dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V08*" --minimum-expected-tests 3
 ```
+
+As classes `V09*` cobrem o player (NAudio com WAV sintético e saída de mentira: tocar, pausar, avançar, voltar, fim do
+áudio, erro em texto fixo e liberação do arquivo), a gestão na tela (renomear, apagar com e sem envio em andamento,
+apagar tudo esvaziando a pasta e removendo a chave de um alvo de teste do Credential Manager, a trava durante a limpeza e
+o arquivo aberto no player liberado antes de apagar) e o diário solto e retomado. Não tocam a rede, os alto-falantes, o
+alvo de produção do cofre nem a pasta real do app.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V09*" --minimum-expected-tests 3
+```

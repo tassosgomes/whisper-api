@@ -63,6 +63,8 @@ public sealed class TranscriptScreenViewModel : INotifyPropertyChanged
     public AsyncRelayCommand Export { get; }
     public RelayCommand Close { get; }
 
+    /// <summary>A gravação aberta (ou em abertura) nesta tela; o host a fecha antes de apagá-la do PC.</summary>
+    public Guid? RecordingId { get; private set; }
     public bool IsLoading => isLoading;
     public IReadOnlyList<TranscriptLine> Lines => lines;
     public string Title => transcript.Recording?.Title ?? "Transcrição";
@@ -95,6 +97,7 @@ public sealed class TranscriptScreenViewModel : INotifyPropertyChanged
     {
         // Uma leitura superada por outra mais nova não mexe na tela: quem termina por último é a escolha atual.
         var current = ++generation;
+        RecordingId = recordingId;
         isLoading = true;
         notice = null;
         lines = [];

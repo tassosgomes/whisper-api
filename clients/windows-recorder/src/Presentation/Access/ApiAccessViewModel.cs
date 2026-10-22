@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Whisper.Recorder.Core.Access;
+using Whisper.Recorder.Presentation.Recording;
 
 namespace Whisper.Recorder.Presentation.Access;
 
@@ -7,12 +8,16 @@ namespace Whisper.Recorder.Presentation.Access;
 public sealed class ApiAccessViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ApiAccessService access;
+    private readonly DataOperationGate? gate;
     private readonly SynchronizationContext? context = SynchronizationContext.Current;
 
-    public ApiAccessViewModel(ApiAccessService access)
+    public ApiAccessViewModel(ApiAccessService access, DataOperationGate? gate = null)
     {
         this.access = access;
+        this.gate = gate;
         access.Changed += OnChanged;
+        if (gate is not null)
+            gate.Changed += OnChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -23,10 +28,14 @@ public sealed class ApiAccessViewModel : INotifyPropertyChanged, IDisposable
     public string Message => access.State.Message;
     public bool CanRecord => true;
     public bool CanSend => access.State.CanSend;
+    /// <summary>Apagar dados do app em curso: salvar e remover a chave ficam desligados até terminar.</summary>
+    public bool IsLocked => gate?.IsBusy == true;
 
     public Task InitializeAsync(CancellationToken cancellationToken = default) => access.CheckSavedAsync(cancellationToken);
-    public Task SaveAsync(string? address, string apiKey, CancellationToken cancellationToken = default) => access.SaveAsync(address, apiKey, cancellationToken);
-    public Task RemoveAsync(CancellationToken cancellationToken = default) => access.RemoveAsync(cancellationToken);
+    public Task SaveAsync(string? address, string apiKey, CancellationToken cancellationToken = default) =>
+        IsLocked ? Task.CompletedTask : access.SaveAsync(address, apiKey, cancellationToken);
+    public Task RemoveAsync(CancellationToken cancellationToken = default) =>
+        IsLocked ? Task.CompletedTask : access.RemoveAsync(cancellationToken);
 
     /// <summary>Checks the saved key before an upload. Missing or rejected access opens settings.</summary>
     public async Task<bool> RequestSendAsync(CancellationToken cancellationToken = default)
@@ -45,5 +54,10 @@ public sealed class ApiAccessViewModel : INotifyPropertyChanged, IDisposable
         else action();
     }
 
-    public void Dispose() => access.Changed -= OnChanged;
+    public void Dispose()
+    {
+        access.Changed -= OnChanged;
+        if (gate is not null)
+            gate.Changed -= OnChanged;
+    }
 }

@@ -2,9 +2,11 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Interop;
 using Whisper.Recorder.Host.Access;
+using Whisper.Recorder.Host.Playback;
 using Whisper.Recorder.Host.Shell;
 using Whisper.Recorder.Host.Transcripts;
 using Whisper.Recorder.Presentation.Access;
+using Whisper.Recorder.Presentation.Playback;
 using Whisper.Recorder.Presentation.Recording;
 using Whisper.Recorder.Presentation.Transcripts;
 using Whisper.Recorder.Presentation.Uploading;
@@ -21,22 +23,31 @@ public partial class MainWindow : FluentWindow
     private ApiAccessWindow? settings;
     private readonly TranscriptScreenViewModel transcripts;
     private TranscriptWindow? transcriptWindow;
+    private readonly RecordingManagementScreenViewModel management;
+    private readonly PlayerScreenViewModel player;
+    private PlayerWindow? playerWindow;
     private readonly ShutdownGuard guard;
     private GlobalHotkey? hotkey;
     private readonly Func<Task> cleanup;
     private bool allowClose;
 
     public MainWindow(RecordingScreenViewModel screen, ApiAccessViewModel access, UploadScreenViewModel upload,
-        TranscriptScreenViewModel transcripts, Func<Task> cleanup)
+        TranscriptScreenViewModel transcripts, RecordingManagementScreenViewModel management, PlayerScreenViewModel player,
+        Func<Task> cleanup)
     {
         this.screen = screen;
         this.access = access;
         this.upload = upload;
         this.transcripts = transcripts;
+        this.management = management;
+        this.player = player;
         this.cleanup = cleanup;
         InitializeComponent();
         DataContext = screen;
         UploadArea.DataContext = upload;
+        ManageArea.DataContext = management;
+        management.PlayRequested += id => _ = ShowPlayerAsync(id);
+        InputBindings.Add(new System.Windows.Input.KeyBinding(management.Play, System.Windows.Input.Key.P, System.Windows.Input.ModifierKeys.Control));
         // A lista é recriada a cada atualização de situação; a escolha do usuário volta para a mesma gravação.
         screen.PropertyChanged += (_, e) =>
         {
@@ -82,9 +93,12 @@ public partial class MainWindow : FluentWindow
     /// <summary>Abre as configurações do acesso à API (uma única janela); também é o destino do primeiro envio.</summary>
     public void ShowSettings()
     {
+        // Durante a limpeza dos dados do app a configuração fica fechada: a chave está sendo removida.
+        if (settings is null && management.IsBusy)
+            return;
         if (settings is null)
         {
-            settings = new ApiAccessWindow(access) { Owner = this };
+            settings = new ApiAccessWindow(access, management) { Owner = this };
             settings.Closed += (_, _) => settings = null;
         }
         settings.Show();
@@ -109,9 +123,57 @@ public partial class MainWindow : FluentWindow
         await transcripts.OpenAsync(id);
     }
 
-    /// <summary>Enter ou duplo clique na gravação transcrita abre a transcrição; nas demais, não faz nada.</summary>
+    /// <summary>Abre (ou reaproveita) a janela do player; a abertura do WAV acontece fora da thread da interface.</summary>
+    private async Task ShowPlayerAsync(Guid id)
+    {
+        if (playerWindow is null)
+        {
+            playerWindow = new PlayerWindow(player) { Owner = this };
+            playerWindow.Closed += (_, _) => playerWindow = null;
+        }
+        playerWindow.Show();
+        playerWindow.Activate();
+        await player.OpenAsync(id);
+    }
+
+    /// <summary>
+    /// Antes de apagar uma gravação: fecha a transcrição e o player dela e espera o arquivo de áudio ser liberado.
+    /// Janelas de outras gravações continuam abertas.
+    /// </summary>
+    public async Task ReleaseRecordingAsync(Guid id)
+    {
+        if (transcriptWindow is { } reading && transcripts.RecordingId == id)
+            reading.Close();
+        if (player.RecordingId == id)
+        {
+            playerWindow?.Close();
+            await player.ReleaseAsync();
+        }
+    }
+
+    /// <summary>Antes de apagar tudo: fecha a transcrição e o player, soltando os arquivos. As configurações ficam abertas, mas bloqueadas.</summary>
+    public async Task ReleaseAllAsync()
+    {
+        transcriptWindow?.Close();
+        playerWindow?.Close();
+        await player.ReleaseAsync();
+    }
+
+    /// <summary>Enter ou duplo clique na gravação transcrita abre a transcrição; F2 renomeia e Delete apaga (com confirmação) a selecionada.</summary>
     private void OnRecordingActivated(object sender, System.Windows.Input.InputEventArgs e)
     {
+        if (e is System.Windows.Input.KeyEventArgs { Key: System.Windows.Input.Key.F2 })
+        {
+            management.Rename.Execute(null);
+            e.Handled = true;
+            return;
+        }
+        if (e is System.Windows.Input.KeyEventArgs { Key: System.Windows.Input.Key.Delete })
+        {
+            management.Delete.Execute(null);
+            e.Handled = true;
+            return;
+        }
         if (e is System.Windows.Input.KeyEventArgs { Key: not System.Windows.Input.Key.Enter })
             return;
         if (upload.OpenTranscript.CanExecute(null))

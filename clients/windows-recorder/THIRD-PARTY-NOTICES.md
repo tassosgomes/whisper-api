@@ -25,7 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-# NAudio.Wasapi 3.3.0 (inclui NAudio.Core 3.3.0)
+# NAudio.Wasapi e NAudio.WinMM 3.3.0 (incluem NAudio.Core 3.3.0)
 
 Source: https://raw.githubusercontent.com/naudio/NAudio/master/license.txt (conferido contra o texto oficial; os pacotes 3.3.0 declaram MIT e "© Mark Heath 2026";
 projeto: https://naudio.github.io/NAudio/)

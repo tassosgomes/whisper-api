@@ -561,3 +561,58 @@ dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "
 O teste com o clipboard real devolve o texto anterior da área de transferência e não toca em conteúdo que não seja
 texto; gerenciadores de histórico da área de transferência (Win+V) podem guardar o texto do teste.
 Validação manual: `tasks/prd-gravador-de-reunioes-desktop/14.0_manual_validation.md`.
+
+### Host: player e gestão dos dados (16.0)
+
+**Player.** `NAudioAudioPlayer` (`src/Host/Playback`) implementa `IAudioPlayer` sobre o NAudio: `WaveFileReader` lê o WAV
+(16 kHz, mono, 16 bits) e `WaveOut` (NAudio.WinMM, o Windows adapta o formato ao dispositivo) toca. Foi escolhido no lugar do
+`MediaPlayer` do WPF porque não depende de dispatcher nem de janela, o arquivo só fica aberto entre `OpenAsync` e
+`DisposeAsync` (apagar a gravação exige o WAV fechado, e o `MediaPlayer` o solta sem prazo definido), a posição é exata e a
+busca é síncrona, e a saída é injetável (`Func<IWavePlayer>`): os testes usam uma saída de mentira, sem alto-falantes.
+`PlayerScreenViewModel` (Presentation) cria **um player por gravação aberta**; `ReleaseAsync` fecha o arquivo e só termina
+quando ele foi liberado. A janela `PlayerWindow` tem **Reproduzir/Pausar** (Espaço), **Voltar 10 s** e **Avançar 10 s**
+(Ctrl+setas), um controle deslizante de posição (setas movem 5 s), a posição e a duração e a situação em texto
+("Reproduzindo", "Pausado", "Parado", "Fim da gravação"). Um temporizador de 250 ms só existe com a janela aberta. O botão
+**Reproduzir** da lista (Ctrl+P) abre a gravação selecionada.
+
+**Renomear e apagar.** Na lista: **Renomear** (F2), **Apagar** (Delete) e **Reproduzir**, todos comandos do
+`RecordingManagementScreenViewModel`. Renomear abre `RenameWindow` (Enter salva, Esc cancela, vazio volta ao título padrão de
+data e hora). Apagar mostra a confirmação do núcleo (caixa nativa com "Não" como padrão) e, se `HasPendingTranscription`, um
+segundo aviso: só a cópia local sai e o job no serviço **não** é cancelado. O envio local dessa gravação é interrompido, a
+janela de transcrição e o player dela são fechados e liberados, e só então o núcleo apaga (`pendingTranscriptionConfirmed`
+vale apenas depois do segundo aceite; se um envio começar depois do primeiro diálogo, o aviso é mostrado de novo). A lista
+usa `DisplayTitle` e é atualizada por `RefreshRecordings` (coalescido, com sequência).
+
+**Apagar todos os dados.** Fica nas **Configurações**, junto com o texto "onde os dados ficam" (pasta do app e Gerenciador de
+Credenciais). Após o aceite: o envio local é cancelado, a janela de transcrição e o player são fechados, o diário é solto e
+o núcleo remove a chave do Credential Manager e esvazia a pasta do app. Depois do sucesso a lista é atualizada, o estado
+de configuração é reverificado (volta a "Absent") e os campos da tela de configuração são limpos.
+
+**Diário.** `ReleasableLogWriter` substitui o `StreamWriter` do `diagnostics.log`: abre sob demanda (acrescentando, leitura
+compartilhada), grava cada linha direto e nunca lança erro de disco. `Release()` fecha o arquivo e descarta as linhas
+até `Resume()`. Após "apagar tudo" com sucesso o diário **não** é retomado até o app ser reiniciado, para a pasta
+permanecer vazia (inclusive o `ApplicationStopped` na saída); se a limpeza falhar, `Resume()` religa o diário.
+
+**Bloqueios.** `DataOperationGate` (Presentation) é única e compartilhada: enquanto uma operação sobre os dados roda (dos
+diálogos ao fim), `RecordingScreenViewModel` não inicia gravação (botão, atalho global e bandeja passam por `StartAsync`),
+`UploadScreenViewModel` não permite Transcrever, `ApiAccessViewModel` ignora salvar/remover a chave e a janela de
+configurações desliga os botões. Gravação ativa desliga renomear, apagar e apagar tudo, com o motivo em texto; o núcleo
+ainda responde `RecordingInProgress` se a gravação começar depois do diálogo.
+
+```powershell
+dotnet test --project clients/windows-recorder/tests/Host.Tests --filter-class "*V09*" --minimum-expected-tests 3
+```
+
+Os testes V09 do host usam pasta temporária, o `NAudioAudioPlayer` com WAV sintético e saída de mentira, o diário real em
+pasta temporária e, só no "apagar tudo", um alvo de teste do Credential Manager (`Whisper.Recorder.Test/ApiKey/V09/...`)
+removido ao fim; nunca tocam o alvo `Whisper.Recorder/ApiKey` nem `%LOCALAPPDATA%\Whisper\Recorder`. O caminho com o
+dispositivo de áudio real (`WaveOut`) só é exercitado na validação manual:
+`tasks/prd-gravador-de-reunioes-desktop/16.0_manual_validation.md`.
+
+**Ajustes da validação da 16.0.** `ForgetRecording(id)` só cancela o envio e fecha o painel quando `id` é a gravação ativa
+do painel (ou em "apagar tudo"); apagar a gravação selecionada não interrompe o envio de outra. A trava
+(`DataOperationGate`) é liberada num `finally` mesmo se o host ou a lista falharem. O player lê e busca pelo mesmo
+`LockedProvider` (a thread da saída lê o `WaveFileReader` enquanto a interface busca). `WaveOut` do NAudio 3 já é o antigo
+`WaveOutEvent` (callback por evento, sem janela), criável e descartável em qualquer thread, e o descarte roda fora da
+interface (`ReleaseAsync`). O núcleo remove junções e links simbólicos dentro dos dados do app **como links**, sem seguir
+para o destino (`Directory.Delete` recursivo do .NET falha com acesso negado em link aninhado); o teste usa `mklink /J`.

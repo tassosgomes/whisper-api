@@ -63,7 +63,7 @@ public sealed class RecordingManagement
             if (recording.State == RecordingState.Recording) return ManagementOutcome.RecordingInProgress;
             // Recheck under the same lock as upload/tracking: an earlier dialog may be stale.
             if (Pending(recording) && !pendingTranscriptionConfirmed) return ManagementOutcome.ConfirmationRequired;
-            Directory.Delete(recordings.DirectoryFor(id), recursive: true);
+            DeleteTree(recordings.DirectoryFor(id));
             return ManagementOutcome.Completed;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return ManagementOutcome.StorageError; }
@@ -84,14 +84,38 @@ public sealed class RecordingManagement
             await vault.RemoveAsync(CancellationToken.None).ConfigureAwait(false);
             if (Directory.Exists(appDirectory))
             {
-                foreach (var file in Directory.EnumerateFiles(appDirectory)) File.Delete(file);
-                foreach (var directory in Directory.EnumerateDirectories(appDirectory)) Directory.Delete(directory, recursive: true);
+                foreach (var entry in Directory.EnumerateFileSystemEntries(appDirectory).ToArray()) DeleteEntry(entry);
             }
             return ManagementOutcome.Completed;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception) { return ManagementOutcome.StorageError; }
         finally { recordings.Operations.Release(); }
+    }
+
+    /// <summary>
+    /// Remove um arquivo, link ou pasta sem seguir links. Junções e links simbólicos dentro dos dados do app são apagados
+    /// como links: o destino, que pode estar fora da pasta do app, nunca é tocado (nem o `Directory.Delete` recursivo
+    /// do .NET dá essa garantia para links aninhados: ele falha com acesso negado).
+    /// </summary>
+    private static void DeleteTree(string path)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(path).ToArray())
+            DeleteEntry(entry);
+        Directory.Delete(path, recursive: false);
+    }
+
+    private static void DeleteEntry(string path)
+    {
+        var attributes = File.GetAttributes(path);
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            // Link: só ele é removido. Link para pasta se apaga como pasta vazia; link para arquivo, como arquivo.
+            if ((attributes & FileAttributes.Directory) != 0) Directory.Delete(path, recursive: false);
+            else File.Delete(path);
+        }
+        else if ((attributes & FileAttributes.Directory) != 0) DeleteTree(path);
+        else File.Delete(path);
     }
 
     private static bool Pending(RecordingMetadata recording) => recording.State is RecordingState.Uploading or RecordingState.Processing;

@@ -50,7 +50,7 @@ public sealed record RecordingListItem(Guid Id, string Title, string CreatedAt, 
             RecordingState.Transcribed when metadata.TrackingProblem != TrackingProblem.None => tracking.Message,
             _ => null
         };
-        return new(metadata.Id, metadata.Title,
+        return new(metadata.Id, metadata.DisplayTitle,
             metadata.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm", Brazil),
             DurationFormat.Format(metadata.Duration), status, glyph, metadata.State, detail, tracking.IsOffline);
     }

@@ -20,6 +20,7 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
 
     private readonly RecordingViewModel recording;
     private readonly IAudioCapture capture;
+    private readonly DataOperationGate? gate;
     private readonly Dictionary<AudioSourceKind, AudioDevice> running = [];
     private IReadOnlyList<RecordingListItem> recordings = [];
     private IReadOnlyList<AudioDevice> microphones = [];
@@ -47,19 +48,22 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     private readonly ConcurrentDictionary<Guid, bool> offline = new();
     private int trackingScheduled;
 
-    public RecordingScreenViewModel(RecordingViewModel recording, IAudioCapture capture)
+    public RecordingScreenViewModel(RecordingViewModel recording, IAudioCapture capture, DataOperationGate? gate = null)
     {
         this.recording = recording;
         this.capture = capture;
-        Start = new AsyncRelayCommand(StartAsync, () => !IsRecording);
+        this.gate = gate;
+        Start = new AsyncRelayCommand(StartAsync, () => !IsRecording && !DataOperationBusy);
         PauseResume = new RelayCommand(TogglePause, () => IsRecording);
         Stop = new AsyncRelayCommand(StopAsync, () => IsRecording);
         Toggle = new AsyncRelayCommand(ToggleAsync);
-        SystemOnly = new AsyncRelayCommand(SystemOnlyAsync, () => !IsRecording);
+        SystemOnly = new AsyncRelayCommand(SystemOnlyAsync, () => !IsRecording && !DataOperationBusy);
         RetryMicrophone = new AsyncRelayCommand(RetryMicrophoneAsync, () => !IsRecording && MicrophoneDenied);
         RefreshDevices = new AsyncRelayCommand(RefreshDevicesAsync, () => !IsRecording);
         if (capture is IAudioDeviceChanges changes)
             changes.DevicesChanged += OnDevicesChanged;
+        if (gate is not null)
+            gate.Changed += OnGateChanged;
         recording.PropertyChanged += OnRecordingChanged;
         ReloadRecordings();
     }
@@ -74,6 +78,9 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
     public AsyncRelayCommand SystemOnly { get; }
     public AsyncRelayCommand RetryMicrophone { get; }
     public AsyncRelayCommand RefreshDevices { get; }
+
+    /// <summary>Apagar dados do app em curso: nenhuma captura nova começa até a operação terminar.</summary>
+    public bool DataOperationBusy => gate?.IsBusy == true;
 
     public bool IsRecording => recording.IsRecording;
     public bool IsPaused => recording.IsPaused;
@@ -291,6 +298,13 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
 
     public async Task StartAsync()
     {
+        if (DataOperationBusy)
+        {
+            // O atalho global e a bandeja chamam este método direto: o bloqueio vale para todos os caminhos.
+            startError = BusyMessage;
+            Raise();
+            return;
+        }
         startError = null;
         previewError = null;
         var devices = new List<AudioDevice>();
@@ -568,6 +582,16 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
+    private const string BusyMessage = "Aguarde: os dados do app estão sendo apagados.";
+
+    private void OnGateChanged()
+    {
+        // A recusa por operação em curso some junto com ela.
+        if (!DataOperationBusy && startError == BusyMessage)
+            startError = null;
+        Raise();
+    }
+
     private void Raise()
     {
         foreach (var command in new[] { Start, Stop, Toggle, SystemOnly, RetryMicrophone, RefreshDevices })
@@ -584,6 +608,8 @@ public sealed class RecordingScreenViewModel : INotifyPropertyChanged, IAsyncDis
         recording.PropertyChanged -= OnRecordingChanged;
         if (capture is IAudioDeviceChanges changes)
             changes.DevicesChanged -= OnDevicesChanged;
+        if (gate is not null)
+            gate.Changed -= OnGateChanged;
         foreach (var kind in running.Keys.ToArray())
             await StopPreviewAsync(kind);
     }

@@ -1,0 +1,66 @@
+<ui:FluentWindow x:Class="Whisper.Recorder.Host.Playback.PlayerWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="Reproduzir" Width="620" Height="320" MinWidth="460" MinHeight="300"
+                 Icon="pack://application:,,,/Host;component/Assets/icon.ico"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Grid.Row="0" Title="Whisper: reprodução" ShowMinimize="False" ShowMaximize="False">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Host;component/Assets/icon.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+        <StackPanel Grid.Row="1" Margin="24,8,24,24">
+            <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Title}" TextTrimming="CharacterEllipsis"
+                       AutomationProperties.Name="Título da gravação" />
+            <TextBlock Margin="0,8,0,8" FontSize="14" Text="{Binding StateText}"
+                       AutomationProperties.Name="Situação da reprodução"
+                       AutomationProperties.LiveSetting="Polite" />
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" VerticalAlignment="Center" FontFamily="Consolas" Text="{Binding PositionText}"
+                           AutomationProperties.Name="Posição atual" />
+                <Slider Grid.Column="1" x:Name="PositionSlider" Margin="12,0" VerticalAlignment="Center"
+                        Minimum="0" Maximum="{Binding MaximumSeconds, Mode=OneWay}"
+                        Value="{Binding PositionSeconds, Mode=TwoWay}"
+                        SmallChange="5" LargeChange="30" IsMoveToPointEnabled="True"
+                        IsEnabled="{Binding IsOpen}"
+                        AutomationProperties.Name="Posição da reprodução, setas movem 5 segundos" />
+                <TextBlock Grid.Column="2" VerticalAlignment="Center" FontFamily="Consolas" Text="{Binding DurationText}"
+                           AutomationProperties.Name="Duração total" />
+            </Grid>
+            <StackPanel Orientation="Horizontal">
+                <ui:Button x:Name="BackButton" Command="{Binding Back}" Margin="0,0,8,0"
+                           Content="⏪ Voltar 10 s" ToolTip="Ctrl+Seta para a esquerda"
+                           AutomationProperties.Name="Voltar 10 segundos, atalho Ctrl+seta para a esquerda" />
+                <ui:Button x:Name="PlayButton" Appearance="Primary" Command="{Binding PlayPause}" Margin="0,0,8,0"
+                           ToolTip="Espaço"
+                           AutomationProperties.Name="Reproduzir ou pausar, atalho Espaço">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding PlayPauseGlyph}" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding PlayPauseText}" />
+                    </StackPanel>
+                </ui:Button>
+                <ui:Button Command="{Binding Forward}" Margin="0,0,8,0"
+                           Content="Avançar 10 s ⏩" ToolTip="Ctrl+Seta para a direita"
+                           AutomationProperties.Name="Avançar 10 segundos, atalho Ctrl+seta para a direita" />
+                <ui:Button Content="Fechar" Command="{Binding Close}" ToolTip="Esc"
+                           AutomationProperties.Name="Fechar o player, atalho Esc" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</ui:FluentWindow>
